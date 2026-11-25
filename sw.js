@@ -1,5 +1,5 @@
 // Offline cache for FLOW 8 Control. Bump VERSION when files change.
-const VERSION = 'flow8-v11';
+const VERSION = 'flow8-v12';
 const FILES = ['./', 'index.html', 'app.css', 'app.js', 'manifest.webmanifest', 'icon.svg'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
@@ -10,7 +10,8 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   e.respondWith(
-    fetch(e.request).then(res => {
+    // bypass the browser HTTP cache (GitHub Pages caches files for 10 min) so updates show at once
+    fetch(e.request, { cache: 'no-cache' }).then(res => {
       const copy = res.clone();
       caches.open(VERSION).then(c => c.put(e.request, copy)).catch(() => {});
       return res;
