@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.45'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.46'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -76,7 +76,7 @@
   // Behringer 4-segment law (0 dB at 3/4 travel, matches FLOW Mix: 0 dB ≈ 0xC2).
   const levelDb = v => {
     if (v <= 0) return '-∞';
-    if (!B.ready) return fmt(-70 + (v - 1) * 80 / 126);
+    if (!fine()) return fmt(-70 + (v - 1) * 80 / 126);
     const f = (v * 255 / 127 + 0.5) / 255;                          // middle of the mixer's 0-255 step
     const d = Math.round(2 * (f >= 0.5 ? 40 * f - 30 : f >= 0.25 ? 80 * f - 50 : f >= 0.0625 ? 160 * f - 70 : 480 * f - 90)) / 2;
     return d < -70 ? '-∞' : fmt(d);                                // 0.5 dB steps like the mixer display
@@ -92,6 +92,8 @@
 
   // ---------- MIDI ----------
   let out = null;
+  // the mixer's own scale (0-255 steps, 0.5 dB readout) applies always, except while a USB MIDI cable is the link
+  const fine = () => B.ready || !out;
   let access = null;
   const lastSent = new Map();
   function send(bytes, force) {
@@ -606,7 +608,7 @@
       // own drag handling: Android Chrome does not drag vertical native ranges reliably
       const setFader = v => {
         // over Bluetooth use the mixer's own 0-255 steps (half as coarse as 0-127), so the dB readout moves in 0.5 dB steps
-        v = Math.max(0, Math.min(127, B.ready ? Math.round(v * 255 / 127) * 127 / 255 : Math.round(v)));
+        v = Math.max(0, Math.min(127, fine() ? Math.round(v * 255 / 127) * 127 / 255 : Math.round(v)));
         if (v === S.levels[S.bus][i]) return;
         fader.value = Math.round(v); S.levels[S.bus][i] = v; slide(v); sendLevel(i); render(); save();
       };
@@ -814,7 +816,7 @@
       let v = 0;
       if (t !== '' && !/^-?(∞|inf|off)$/i.test(t)) {
         const d = num(t); if (d === null || d < -200 || d > 10) return false;
-        if (B.ready) {                                     // the mixer step whose display is closest to the typed value
+        if (fine()) {                                      // the mixer step whose display is closest to the typed value
           let best = 1;
           for (let b = 1; b <= 255; b++) if (Math.abs(lawDb(b) - d) < Math.abs(lawDb(best) - d)) best = b;
           v = d < -70 ? 0 : best * 127 / 255;
@@ -878,7 +880,7 @@
     const row = (label, o) => mkRow(label, o, chanRows);
     group('poziomy', BUSES.map((b, bi) => row(b.label, {
       get: () => S.levels[bi][i] / 127,
-      set: p => { S.levels[bi][i] = B.ready ? Math.round(p * 255) * 127 / 255 : Math.round(p * 127); sendLevelBus(i, bi); },
+      set: p => { S.levels[bi][i] = fine() ? Math.round(p * 255) * 127 / 255 : Math.round(p * 127); sendLevelBus(i, bi); },
       text: () => levelDb(S.levels[bi][i]) + ' dB', ask: () => askLevel(i, bi)
     })), '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/>', () => openFx(i));
     group('korektor', EQ_NAMES.map((n, b) => row(n, {
@@ -1093,13 +1095,13 @@
       g.append(two);
       g.append(mkRow('wysyłka kanału', {
         get: () => S.levels[bi][i] / 127,
-        set: p => { S.levels[bi][i] = B.ready ? Math.round(p * 255) * 127 / 255 : Math.round(p * 127); sendLevelBus(i, bi); },
+        set: p => { S.levels[bi][i] = fine() ? Math.round(p * 255) * 127 / 255 : Math.round(p * 127); sendLevelBus(i, bi); },
         text: () => levelDb(S.levels[bi][i]) + ' dB', ask: () => askLevel(i, bi)
       }, subRows));
       const mi = CHANNELS.findIndex(c => c.master);
       g.append(mkRow('powrót efektu', {
         get: () => S.levels[bi][mi] / 127,
-        set: p => { S.levels[bi][mi] = B.ready ? Math.round(p * 255) * 127 / 255 : Math.round(p * 127); sendLevelBus(mi, bi); },
+        set: p => { S.levels[bi][mi] = fine() ? Math.round(p * 255) * 127 / 255 : Math.round(p * 127); sendLevelBus(mi, bi); },
         text: () => levelDb(S.levels[bi][mi]) + ' dB', ask: () => askLevel(mi, bi)
       }, subRows));
       subRows.push(() => {
@@ -1294,7 +1296,7 @@
         col.addEventListener('pointermove', e => {
           if (!a) return;
           const p = Math.max(0, Math.min(1, v0 / 127 + (y0 - e.clientY) / Math.max(wrap.getBoundingClientRect().height, 60)));
-          const v = B.ready ? Math.round(p * 255) * 127 / 255 : Math.round(p * 127);
+          const v = fine() ? Math.round(p * 255) * 127 / 255 : Math.round(p * 127);
           o.dragAt = performance.now();
           if (v === S.levels[S.bus][i]) return;
           S.levels[S.bus][i] = v; refs[i].fader.value = Math.round(v); slide(v); sendLevel(i); render(); save();

@@ -755,3 +755,13 @@ html.v-meters .big { display: grid; grid-template-columns: repeat(8, minmax(0, 1
   .bar { column-gap: var(--u); }
 }
 .conn-menu [hidden] { display: none; }
+
+/* v0.46: dot-matrix lettering on most labels (Arek's request); long hints and messages stay in the plain face */
+.switch button, .scene, .s-val, .s-num, .pan-val, .key.solo, .key.wide, .bar-label, .metro-unit, .metro-check, .pill,
+.ask-title, .ask-btn, .chan-num, .chan-title, .chan-label, .chan-switch, .eq-chip, .fx-preset, .conn-status, .big-name,
+.s-knob-label, .readout-bus, html.v-faders .s-val {
+  font-family: Doto, ui-monospace, monospace; font-weight: 900; letter-spacing: 0;
+}
+.chan-row { grid-template-columns: 128px minmax(0, 1fr) 84px; }
+.chan-label { font-size: 12px; }
+.s-name, html.v-faders .s-name { font-family: Doto, ui-monospace, monospace; font-weight: 900; }
