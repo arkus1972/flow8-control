@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.4'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.5'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
 
   // ---------- Model ----------
@@ -24,6 +24,8 @@
     { id: 'fx1',  label: 'efekt 1',   short: 'fx 1',  midi: 11, sendCC: 16 },
     { id: 'fx2',  label: 'efekt 2',   short: 'fx 2',  midi: 12, sendCC: 17 }
   ];
+  // one mute icon for every channel: crossed-out ear
+  const MUTE_ICON = 'M9.5 13a6.5 6.5 0 0 1 13 0c0 4.5-4.5 5.2-4.5 9a3.5 3.5 0 0 1-6.5 1.8M13 13.5a3 3 0 0 1 6 0M5 5l20 20';
   const CC = { level: 7, mute: 5, solo: 6, gain: 8 };
   const GLOBAL_CH = 16;
   const STORE = 'flow8-control-v1';
@@ -338,7 +340,7 @@
 
       const keys = el('div', 's-keys');
       const mute = el('button', 'key mute' + (c.master ? ' none' : ''), { type: 'button', 'aria-pressed': 'false' });
-      mute.innerHTML = c.master ? '' : svgGlyph(c.glyph);
+      mute.innerHTML = c.master ? '' : svgGlyph(MUTE_ICON);
       mute.addEventListener('click', () => { S.mutes[i] = !S.mutes[i]; sendMute(i); select(i); render(); save(); });
       const solo = el('button', 'key solo' + (c.master ? ' none' : ''), { type: 'button', 'aria-pressed': 'false' });
       solo.textContent = 'S';
