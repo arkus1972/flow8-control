@@ -59,6 +59,7 @@ public class FlowBlePlugin extends Plugin {
     private PluginCall writeCall;
     private ScanCallback scanCb;
     private int attempts;
+    private long scanStart;
     private boolean discovering;
 
     private String alias() { return Build.VERSION.SDK_INT >= 31 ? "ble12" : "bleOld"; }
@@ -87,6 +88,7 @@ public class FlowBlePlugin extends Plugin {
         connectCall = call;
         attempts = 0;
         BluetoothLeScanner sc = ad.getBluetoothLeScanner();
+        scanStart = System.currentTimeMillis();
         scanCb = new ScanCallback() {
             @Override public void onScanResult(int type, ScanResult r) {
                 BluetoothDevice d = r.getDevice();
@@ -94,7 +96,13 @@ public class FlowBlePlugin extends Plugin {
                 if (name == null) name = d.getName();
                 boolean hasSvc = r.getScanRecord() != null && r.getScanRecord().getServiceUuids() != null
                     && r.getScanRecord().getServiceUuids().toString().toLowerCase().contains(SVC.toString());
-                if (hasSvc || (name != null && name.toUpperCase().startsWith("FLOW"))) {
+                // FLOW Mix looks for the control service only. The mixer's audio Bluetooth is a
+                // separate device with a similar name, so the name is just a late fallback.
+                boolean byName = name != null && name.toUpperCase().startsWith("FLOW")
+                    && !name.toUpperCase().contains("AUDIO")
+                    && d.getType() != BluetoothDevice.DEVICE_TYPE_CLASSIC
+                    && System.currentTimeMillis() - scanStart > 6000;
+                if (hasSvc || byName) {
                     stopScan(sc);
                     connectDevice(d);
                 }
