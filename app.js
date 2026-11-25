@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.40'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.41'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -607,7 +607,7 @@
       const setFader = v => {
         v = Math.max(0, Math.min(127, Math.round(v)));
         if (v === S.levels[S.bus][i]) return;
-        fader.value = v; S.levels[S.bus][i] = v; sendLevel(i); render(); save();
+        fader.value = v; S.levels[S.bus][i] = v; slide(v); sendLevel(i); render(); save();
       };
       let drag = null;
       fader.addEventListener('pointerdown', e => {
@@ -704,7 +704,7 @@
     });
     $('#sel-level').addEventListener('click', () => askLevel(S.sel));
     $('#sel-gain').addEventListener('click', () => CHANNELS[S.sel].gain ? askGain(S.sel) : askPan(S.sel));
-    const ck = $('#click-toggle'), ckText = () => { ck.textContent = 'Klik gałek: ' + (S.click === false ? 'wyłączony' : 'włączony'); };
+    const ck = $('#click-toggle'), ckText = () => { ck.textContent = 'Dźwięki i wibracja: ' + (S.click === false ? 'wyłączone' : 'włączone'); };
     ck.addEventListener('click', e => { e.stopPropagation(); S.click = S.click === false; ckText(); save(); notch(); }); ckText();
     $('#view').addEventListener('click', () => setView(VIEWS[(VIEWS.indexOf(S.view || '') + 1) % VIEWS.length]));
     $('#theme').addEventListener('click', () => { S.theme = S.theme === 'dark' ? 'light' : 'dark'; render(); save(); });
@@ -1151,16 +1151,46 @@
   addEventListener('resize', fit); fit();
   // gain knob turns in 1 dB notches, each with a click and a short buzz like an old encoder
   let clickCtx = null;
+  function audio() {
+    clickCtx = clickCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (clickCtx.state === 'suspended') clickCtx.resume();
+    return clickCtx;
+  }
   function notch() {
     if (S.click === false) return;
-    try { if (navigator.vibrate) navigator.vibrate(7); } catch (e) {}
+    try { if (navigator.vibrate) navigator.vibrate(18); } catch (e) {}
     try {
-      clickCtx = clickCtx || new (window.AudioContext || window.webkitAudioContext)();
-      if (clickCtx.state === 'suspended') clickCtx.resume();
-      const t = clickCtx.currentTime, o = clickCtx.createOscillator(), g = clickCtx.createGain();
-      o.type = 'square'; o.frequency.setValueAtTime(2400, t); o.frequency.exponentialRampToValueAtTime(900, t + 0.012);
-      g.gain.setValueAtTime(0.12, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.018);
-      o.connect(g); g.connect(clickCtx.destination); o.start(t); o.stop(t + 0.02);
+      const c = audio(), t = c.currentTime, o = c.createOscillator(), g = c.createGain(), o2 = c.createOscillator(), g2 = c.createGain();
+      o.type = 'square'; o.frequency.setValueAtTime(2600, t); o.frequency.exponentialRampToValueAtTime(700, t + 0.016);
+      g.gain.setValueAtTime(0.32, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.026);
+      o.connect(g); g.connect(c.destination); o.start(t); o.stop(t + 0.03);
+      // short low thump under the click, so the notch feels mechanical
+      o2.type = 'sine'; o2.frequency.setValueAtTime(190, t); o2.frequency.exponentialRampToValueAtTime(70, t + 0.03);
+      g2.gain.setValueAtTime(0.45, t); g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.04);
+      o2.connect(g2); g2.connect(c.destination); o2.start(t); o2.stop(t + 0.045);
+    } catch (e) {}
+  }
+  // soft hiss of a fader cap sliding in its slot: looped filtered noise, loudness follows the finger speed
+  let hiss = null, hissAt = 0, hissV = 0;
+  function slide(v) {
+    if (S.click === false) return;
+    try {
+      const c = audio(), now = performance.now();
+      if (!hiss) {
+        const buf = c.createBuffer(1, c.sampleRate, c.sampleRate), d = buf.getChannelData(0);
+        for (let k = 0; k < d.length; k++) d[k] = Math.random() * 2 - 1;
+        const src = c.createBufferSource(), bp = c.createBiquadFilter(), g = c.createGain();
+        src.buffer = buf; src.loop = true; bp.type = 'bandpass'; bp.frequency.value = 2200; bp.Q.value = 0.7; g.gain.value = 0;
+        src.connect(bp); bp.connect(g); g.connect(c.destination); src.start();
+        hiss = { g, bp };
+      }
+      const dt = Math.max(8, now - hissAt), speed = Math.min(1, Math.abs(v - hissV) / dt * 6);
+      hissAt = now; hissV = v;
+      const t = c.currentTime;
+      hiss.g.gain.cancelScheduledValues(t);
+      hiss.g.gain.setTargetAtTime(0.03 + speed * 0.11, t, 0.015);
+      hiss.g.gain.setTargetAtTime(0, t + 0.07, 0.05);
+      hiss.bp.frequency.setTargetAtTime(1600 + speed * 2600, t, 0.03);
     } catch (e) {}
   }
   function setGain(i, v) {
@@ -1265,7 +1295,7 @@
           const v = B.ready ? Math.round(p * 255) * 127 / 255 : Math.round(p * 127);
           o.dragAt = performance.now();
           if (v === S.levels[S.bus][i]) return;
-          S.levels[S.bus][i] = v; refs[i].fader.value = Math.round(v); sendLevel(i); render(); save();
+          S.levels[S.bus][i] = v; refs[i].fader.value = Math.round(v); slide(v); sendLevel(i); render(); save();
         });
         const end = () => { a = false; };
         col.addEventListener('pointerup', end); col.addEventListener('pointercancel', end);
