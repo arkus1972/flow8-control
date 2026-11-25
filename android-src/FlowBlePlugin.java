@@ -19,6 +19,8 @@ import android.content.Context;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -196,6 +198,20 @@ public class FlowBlePlugin extends Plugin {
     }
 
     @SuppressLint("MissingPermission")
+    // one short, crisp haptic click for a knob notch (the WebView's navigator.vibrate is too weak or ignored on some phones)
+    @PluginMethod
+    public void buzz(PluginCall call) {
+        try {
+            Vibrator v = (Vibrator) getContext().getSystemService(Context.VIBRATOR_SERVICE);
+            if (v != null && v.hasVibrator()) {
+                if (Build.VERSION.SDK_INT >= 29) v.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_HEAVY_CLICK));
+                else if (Build.VERSION.SDK_INT >= 26) v.vibrate(VibrationEffect.createOneShot(25, 255));
+                else v.vibrate(25);
+            }
+        } catch (Exception e) { }
+        call.resolve();
+    }
+
     @PluginMethod
     public void write(PluginCall call) {
         if (gatt == null || chr == null) { call.reject("Brak połączenia"); return; }

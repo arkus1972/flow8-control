@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.41'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.42'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -688,13 +688,14 @@
 
     const menu = $('#conn-menu'), cbtn = $('#connect');
     const closeMenu = () => { menu.hidden = true; cbtn.setAttribute('aria-expanded', 'false'); };
+    // the lamp always opens the menu (also in the Android app and while connected), it never connects or disconnects by itself
     cbtn.addEventListener('click', e => {
       e.stopPropagation();
-      if (B.ready) { if (confirmDisconnect()) return; }
-      if (NATIVE) { bleConnect(); return; }               // the Android app talks Bluetooth only
+      $('#conn-ble').textContent = B.ready ? 'Rozłącz Bluetooth' : 'Połącz przez Bluetooth';
+      $('#conn-usb').hidden = !!NATIVE;
       menu.hidden = !menu.hidden; cbtn.setAttribute('aria-expanded', menu.hidden ? 'false' : 'true');
     });
-    $('#conn-ble').addEventListener('click', () => { closeMenu(); bleConnect(); });
+    $('#conn-ble').addEventListener('click', () => { closeMenu(); if (B.ready && confirmDisconnect()) return; bleConnect(); });
     $('#conn-usb').addEventListener('click', () => { closeMenu(); connect(); });
     document.addEventListener('click', e => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(); });
     $('#sync').addEventListener('click', () => {
@@ -1158,7 +1159,7 @@
   }
   function notch() {
     if (S.click === false) return;
-    try { if (navigator.vibrate) navigator.vibrate(18); } catch (e) {}
+    try { if (NATIVE && NATIVE.buzz) NATIVE.buzz().catch(() => {}); else if (navigator.vibrate) navigator.vibrate(18); } catch (e) {}
     try {
       const c = audio(), t = c.currentTime, o = c.createOscillator(), g = c.createGain(), o2 = c.createOscillator(), g2 = c.createGain();
       o.type = 'square'; o.frequency.setValueAtTime(2600, t); o.frequency.exponentialRampToValueAtTime(700, t + 0.016);

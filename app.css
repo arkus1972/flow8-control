@@ -754,3 +754,4 @@ html.v-meters .big { display: grid; grid-template-columns: repeat(8, minmax(0, 1
   .scene-keys, .tools { gap: 5px; }
   .bar { column-gap: var(--u); }
 }
+.conn-menu [hidden] { display: none; }
