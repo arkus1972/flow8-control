@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.38'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.39'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -613,7 +613,7 @@
       fader.addEventListener('pointerdown', e => {
         e.preventDefault(); select(i); fader.focus({ preventScroll: true });
         fader.setPointerCapture(e.pointerId);
-        const r = fader.getBoundingClientRect(), th = (portrait() && S.view !== 'faders' ? 56 : 34) * K;
+        const r = fader.getBoundingClientRect(), th = (portrait() ? 56 : 34) * K;
         const travel = r.height - th, cur = +fader.value;
         const thumbY = r.bottom - th / 2 - cur / 127 * travel;
         drag = { id: e.pointerId, travel, y0: e.clientY, v0: cur };
@@ -710,7 +710,7 @@
     // keep "selected" in sync with the visible page in portrait
     let scrollTimer = 0;
     strips.addEventListener('scroll', () => {
-      if (!portrait() || S.view) return;
+      if (!portrait() || S.view === 'meters') return;
       clearTimeout(scrollTimer);
       scrollTimer = setTimeout(() => {
         const i = Math.round(strips.scrollLeft / strips.clientWidth);
@@ -1157,7 +1157,7 @@
     if (scroll) scrollToSel(true);
   }
   function scrollToSel(smooth) {
-    if (!portrait() || S.view === 'faders') return;
+    if (!portrait() || S.view === 'meters') return;
     const strips = $('#strips');
     strips.scrollTo({ left: S.sel * strips.clientWidth, behavior: smooth ? 'smooth' : 'auto' });
   }
@@ -1230,7 +1230,7 @@
     root.classList.toggle('v-faders', S.view === 'faders'); root.classList.toggle('v-meters', S.view === 'meters');
     closeChan();
     const strips = $('#strips');
-    if (S.view === 'faders') strips.scrollLeft = 0; else setTimeout(() => scrollToSel(false), 0);
+    setTimeout(() => scrollToSel(false), 0);
     if (S.view === 'meters' && !big) {
       big = el('section', 'big', { id: 'big', 'aria-label': 'Wskaźniki poziomu' });
       CHANNELS.forEach((c, i) => {
