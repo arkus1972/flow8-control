@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.42'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.43'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -660,7 +660,7 @@
       pg.addEventListener('click', () => select(i, true));
       pager.appendChild(pg);
 
-      refs.push({ col, strip, name, knob, mute, solo, fader, val, pg, pan });
+      refs.push({ col, strip, name, knob, kl, mute, solo, fader, val, pg, pan });
     });
 
     // scenes = mixer snapshots 1..4 (global channel, program change)
@@ -1365,6 +1365,7 @@
       r.strip.classList.toggle('sel', sel);
       r.name.textContent = c.master ? bus.short : S.names[i];
       r.knob.style.setProperty('--a', (-135 + S.gains[i] / 127 * 270) + 'deg');
+      r.kl.textContent = 'gain ' + gainDb(S.gains[i]).replace(/,0$/, '') + ' dB';
       r.knob.setAttribute('aria-valuenow', S.gains[i]);
       r.knob.setAttribute('aria-valuetext', gainDb(S.gains[i]) + ' dB');
       r.knob.setAttribute('aria-label', 'Gain ' + S.names[i]);
