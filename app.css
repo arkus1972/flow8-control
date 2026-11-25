@@ -686,3 +686,10 @@ button:focus-visible, input:focus-visible, .knob:focus-visible {
   .ticks span { background: linear-gradient(to right, var(--ink-3) 0 calc(50% - 30px), transparent calc(50% - 30px) calc(50% + 30px), var(--ink-3) calc(50% + 30px)); opacity: .6; }
   .ticks span.zero { background: linear-gradient(to right, var(--accent) 0 calc(50% - 30px), transparent calc(50% - 30px) calc(50% + 30px), var(--accent) calc(50% + 30px)); opacity: 1; }
 }
+
+/* connection light: a bare 6px lamp in the top right corner of the display (the touch area stays finger-sized) */
+.conn { position: absolute; top: 0; right: 0; z-index: 5; max-width: none; }
+.pill.dot { width: 32px; height: 32px; background: none; border: 0; box-shadow: none; align-items: flex-start; justify-content: flex-end; padding: 8px 9px 0 0; border-radius: 0; }
+.pill.dot .led { width: 6px; height: 6px; }
+.conn-menu, .conn-menu[id] { left: auto; right: 6px; top: 26px; }
+@media (orientation: portrait) { .conn-menu { left: auto; right: 6px; width: 200px; } }
