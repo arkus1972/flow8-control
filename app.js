@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.23'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.24'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -39,6 +39,7 @@
     // levels[bus][channel], 0..127 (MIDI value). Index 7 = that bus's master.
     levels: BUSES.map((b, bi) => CHANNELS.map((c, i) => (bi === 0 ? (i === 7 ? 100 : 90) : (i === 7 ? 100 : 0)))),
     gains: CHANNELS.map(() => 40),
+    pans: CHANNELS.map(() => 0),               // -50 (left) .. 0 .. +50 (right)
     mutes: CHANNELS.map(() => false),
     solos: CHANNELS.map(() => false)
   });
@@ -46,6 +47,7 @@
   try {
     const saved = JSON.parse(localStorage.getItem(STORE) || 'null');
     if (saved && saved.levels && saved.levels.length === BUSES.length) S = Object.assign(S, saved);
+    if (!Array.isArray(S.pans) || S.pans.length !== CHANNELS.length) S.pans = CHANNELS.map(() => 0);
   } catch (e) { /* storage unavailable: run with defaults */ }
   let saveTimer = 0;
   const save = () => {
@@ -93,6 +95,9 @@
     else cc(CHANNELS[i].midi, bus.sendCC, v, force);
   }
   const sendGain = (i, f) => B.ready ? bleGain(i) : CHANNELS[i].gain && cc(CHANNELS[i].midi, CC.gain, S.gains[i], f);
+  // pan / balance: MIDI CC10 (64 = centre); Bluetooth 0x00 ChannelPan (0x7f = centre), as FLOW Mix sends it
+  const panOk = i => !CHANNELS[i].master || S.bus === 0;       // the master strip carries MAIN balance only
+  const sendPan = (i, f) => { if (!panOk(i)) return; B.ready ? blePan(i) : cc(CHANNELS[i].master ? BUSES[0].midi : CHANNELS[i].midi, 10, Math.round(64 + S.pans[i] / 50 * 63), f); };
   const sendMute = (i, f) => B.ready ? bleMute(i) : !CHANNELS[i].master && cc(CHANNELS[i].midi, CC.mute, S.mutes[i] ? 127 : 0, f);
   const sendSolo = (i, f) => B.ready ? bleSolo(i) : !CHANNELS[i].master && cc(CHANNELS[i].midi, CC.solo, S.solos[i] ? 127 : 0, f);
 
@@ -104,6 +109,7 @@
         BUSES.forEach((b, bi) => cc(c.midi, b.sendCC, S.levels[bi][i], true));
         sendGain(i, true); sendMute(i, true); sendSolo(i, true);
       }
+      cc(c.master ? BUSES[0].midi : c.midi, 10, Math.round(64 + S.pans[i] / 50 * 63), true);
     });
   }
 
@@ -159,11 +165,19 @@
     B.touched.set('g' + c.ble, performance.now());
     bleQueue('g' + i, 0x02, [c.ble, gainByte(S.gains[i])]);
   }
+  const panByte = v => Math.max(0, Math.min(254, Math.round(127 + v / 50 * 127)));
+  const panFrom = b => Math.max(-50, Math.min(50, Math.round((b - 127) / 127 * 50)));
+  function blePan(i) {
+    const id = CHANNELS[i].master ? 0x0f : CHANNELS[i].ble;
+    B.touched.set('p' + id, performance.now());
+    bleQueue('p' + i, 0x00, [id, panByte(S.pans[i])]);
+  }
   function bleMute(i) { const c = CHANNELS[i]; if (!c.master) bleQueue('m' + i, 0x08, [c.ble, S.mutes[i] ? 1 : 0]); }
   function bleSolo(i) { const c = CHANNELS[i]; if (!c.master) bleQueue('s' + i, 0x01, [c.ble, S.solos[i] ? 1 : 0]); }
   function bleSendAll() {
     CHANNELS.forEach((c, i) => {
       BUSES.forEach((b, bi) => bleLevel(i, bi));
+      blePan(i);
       if (c.master) return;
       bleGain(i); bleMute(i); bleSolo(i);
     });
@@ -321,6 +335,11 @@
         S.gains[i] = Math.max(0, Math.min(127, (p[1] - 0x50) * 127 / 160));
         render(); save(); break;
       }
+      case 0x00: {                                                // pan / balance
+        const i = p[0] === 0x0f ? CHANNELS.findIndex(c => c.master) : idx(p[0]);
+        if (i < 0 || now - (B.touched.get('p' + p[0]) || 0) < 400) break;
+        S.pans[i] = panFrom(p[1]); render(); save(); break;
+      }
       case 0x08: { const i = idx(p[0]); if (i >= 0) { S.mutes[i] = !!p[1]; render(); save(); } break; }
       case 0x01: { const i = idx(p[0]); if (i >= 0) { S.solos[i] = !!p[1]; render(); save(); } break; }
       case 0x38: bleMixerState(p); break;                         // full state (after connect / scene load)
@@ -339,29 +358,30 @@
   function bleMixerState(p) {
     let k = 0;
     const gains = [];
-    const flags = [];
+    const flags = [], pans = [];
     for (let ch = 0; ch < 7; ch++) {
       if (p[k] !== ch || k + 27 > p.length) return;               // layout not as expected: ignore
-      gains[ch] = p[k + 2]; flags[ch] = p[k + 1];               // flags: bit0 mute, bit6 solo (as in FLOW Mix)
+      gains[ch] = p[k + 2]; flags[ch] = p[k + 1]; pans[ch] = p[k + 6];               // flags: bit0 mute, bit6 solo (as in FLOW Mix)
       k += 27 + p[k + 26];
     }
-    const lv = BUSES.map(() => null), master = BUSES.map(() => null); let mainMute = null;
+    const lv = BUSES.map(() => null), master = BUSES.map(() => null); let mainMute = null, mainPan = null;
     while (k < p.length) {
       const id = p[k], bi = BUSES.findIndex(b => b.dst === id);
       if (bi < 0) break;
       if (id === 0x0c || id === 0x0d) { lv[bi] = Array.from(p.slice(k + 8, k + 15)); k += 17; }
-      else { master[bi] = p[k + 2]; if (id === 0x0f) mainMute = !!(p[k + 1] & 1); lv[bi] = Array.from(p.slice(k + 5, k + 12)); k += 52; }
+      else { master[bi] = p[k + 2]; if (id === 0x0f) { mainMute = !!(p[k + 1] & 1); mainPan = p[k + 3]; } lv[bi] = Array.from(p.slice(k + 5, k + 12)); k += 52; }
     }
     const to127 = x => x * 127 / 255;
     CHANNELS.forEach((c, i) => {
       if (c.master) return;
       if (c.gain) S.gains[i] = Math.max(0, Math.min(127, (gains[c.ble] - 0x50) * 127 / 160));
-      S.mutes[i] = !!(flags[c.ble] & 1); S.solos[i] = !!(flags[c.ble] & 0x40);
+      S.mutes[i] = !!(flags[c.ble] & 1); S.solos[i] = !!(flags[c.ble] & 0x40); S.pans[i] = panFrom(pans[c.ble]);
       BUSES.forEach((b, bi) => { if (lv[bi] && lv[bi].length === 7) S.levels[bi][i] = to127(lv[bi][c.ble]); });
     });
     const mi = CHANNELS.findIndex(c => c.master);
     BUSES.forEach((b, bi) => { if (master[bi] !== null) S.levels[bi][mi] = to127(master[bi]); });
     if (mainMute !== null) S.mutes[mi] = mainMute;
+    if (mainPan !== null) S.pans[mi] = panFrom(mainPan);
     render(); save();
   }
 
@@ -476,6 +496,10 @@
         keys.append(mute, solo);
       }
 
+      const pan = el('div', 's-pan', { role: 'slider', tabindex: '0', 'aria-valuemin': '-50', 'aria-valuemax': '50' });
+      pan.append(el('span', 'pan-dot'), el('span', 'pan-val'));
+      bindPan(pan, i);
+
       const faderWrap = el('div', 's-fader');
       const fader = el('input', 'fader', { type: 'range', min: '0', max: '127', step: '1' });
       fader.addEventListener('input', () => { S.levels[S.bus][i] = +fader.value; sendLevel(i); select(i); render(); save(); });
@@ -517,7 +541,7 @@
 
       const val = el('div', 's-val');
 
-      strip.append(head, knobWrap, keys, faderWrap, val);
+      strip.append(head, knobWrap, keys, pan, faderWrap, val);
       strips.appendChild(strip);
 
       const pg = el('button', '', { type: 'button', 'aria-label': 'Kanał ' + (i + 1) });
@@ -525,7 +549,7 @@
       pg.addEventListener('click', () => select(i, true));
       pager.appendChild(pg);
 
-      refs.push({ col, strip, name, knob, mute, solo, fader, val, pg });
+      refs.push({ col, strip, name, knob, mute, solo, fader, val, pg, pan });
     });
 
     // scenes = mixer snapshots 1..4 (global channel, program change)
@@ -606,6 +630,33 @@
       const d = { ArrowUp: 2, ArrowRight: 2, ArrowDown: -2, ArrowLeft: -2, PageUp: 10, PageDown: -10 }[e.key];
       if (d) { e.preventDefault(); setGain(i, S.gains[i] + d); }
     });
+  }
+  // pan: drag sideways, double tap = centre
+  function bindPan(pan, i) {
+    let active = false, startX = 0, startV = 0, lastTap = 0;
+    pan.addEventListener('pointerdown', e => {
+      const t = performance.now();
+      if (t - lastTap < 320) { setPan(i, 0); lastTap = 0; return; }
+      lastTap = t; active = true; startX = e.clientX; startV = S.pans[i]; pan.setPointerCapture(e.pointerId); select(i);
+    });
+    pan.addEventListener('pointermove', e => {
+      if (!active) return;
+      const v = startV + (e.clientX - startX) * 100 / Math.max(pan.clientWidth, 140);
+      setPan(i, Math.abs(v) < 3 ? 0 : v);                         // light snap to centre
+    });
+    const end = () => { active = false; };
+    pan.addEventListener('pointerup', end);
+    pan.addEventListener('pointercancel', end);
+    pan.addEventListener('keydown', e => {
+      const d = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1, PageUp: 10, PageDown: -10 }[e.key];
+      if (d) { e.preventDefault(); setPan(i, S.pans[i] + d); } else if (e.key === 'Home') setPan(i, 0);
+    });
+  }
+  const panText = v => v === 0 ? 'C' : (v < 0 ? 'L' : 'R') + Math.abs(v);
+  function setPan(i, v) {
+    const n = Math.max(-50, Math.min(50, Math.round(v)));
+    if (n === S.pans[i] || !panOk(i)) return;
+    S.pans[i] = n; sendPan(i); render(); save();
   }
   function setGain(i, v) {
     const n = clamp(v);
@@ -720,6 +771,12 @@
       r.knob.setAttribute('aria-valuenow', S.gains[i]);
       r.knob.setAttribute('aria-valuetext', gainDb(S.gains[i]) + ' dB');
       r.knob.setAttribute('aria-label', 'Gain ' + S.names[i]);
+      r.pan.style.setProperty('--p', (S.pans[i] + 50) / 100);
+      r.pan.classList.toggle('none', !panOk(i));
+      r.pan.classList.toggle('off', S.pans[i] !== 0);
+      r.pan.lastChild.textContent = panText(S.pans[i]);
+      r.pan.setAttribute('aria-valuenow', S.pans[i]);
+      r.pan.setAttribute('aria-label', 'Panorama ' + S.names[i]);
       r.mute.setAttribute('aria-pressed', muted ? 'true' : 'false');
       r.mute.setAttribute('aria-label', 'Wycisz ' + S.names[i]);
       r.solo.setAttribute('aria-pressed', S.solos[i] ? 'true' : 'false');
@@ -735,7 +792,7 @@
     $('#sel-name').textContent = sc.master ? bus.label : S.names[S.sel];
     $('#sel-name').classList.toggle('muted', !!S.mutes[S.sel]);
     $('#sel-level').textContent = (sc.master ? 'poziom ' : (S.bus === 0 ? 'poziom ' : 'wysyłka ')) + levelDb(lv[S.sel]) + ' dB';
-    $('#sel-gain').textContent = sc.gain ? 'gain ' + gainDb(S.gains[S.sel]) + ' dB' : '';
+    $('#sel-gain').textContent = (sc.gain ? 'gain ' + gainDb(S.gains[S.sel]) + ' dB  ' : '') + (panOk(S.sel) ? 'pan ' + panText(S.pans[S.sel]) : '');
     $('#bus-label').textContent = 'miks: ' + bus.label;
 
     [...document.querySelectorAll('.scene')].forEach((b, n) => b.setAttribute('aria-pressed', n === S.scene ? 'true' : 'false'));

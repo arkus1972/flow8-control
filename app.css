@@ -173,8 +173,8 @@ button:focus-visible, input:focus-visible, .knob:focus-visible {
 }
 .strip {
   display: grid;
-  grid-template-areas: "knob" "keys" "fader" "val" "head";
-  grid-template-rows: 88px 56px minmax(0, 1fr) 24px 24px;
+  grid-template-areas: "knob" "keys" "pan" "fader" "val" "head";
+  grid-template-rows: 88px 56px 28px minmax(0, 1fr) 24px 24px;
   row-gap: var(--u);
   justify-items: center;
   align-items: center;
@@ -208,6 +208,32 @@ button:focus-visible, input:focus-visible, .knob:focus-visible {
 .ticks span { position: absolute; left: 0; right: 0; top: calc((1 - var(--p)) * 100%); height: 1px; margin-top: -0.5px; background: var(--ink-3); opacity: .5; }
 .ticks span.zero { height: 2px; margin-top: -1px; background: var(--accent); opacity: 1; }
 .s-val { grid-area: val; font-size: 12px; font-weight: 600; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+/* ---------- Pan: a thin line with a small dot, lighter than the gain knob ---------- */
+.s-pan {
+  --p: .5;
+  grid-area: pan; position: relative; width: min(100%, 88px); height: 28px;
+  touch-action: none; cursor: ew-resize;
+}
+.s-pan::before {                      /* the line */
+  content: ""; position: absolute; left: 6px; right: 6px; top: 9px; height: 2px; border-radius: 1px;
+  background: var(--ink-3); opacity: .45;
+}
+.s-pan::after {                       /* centre mark */
+  content: ""; position: absolute; left: calc(50% - 1px); top: 5px; width: 2px; height: 10px; border-radius: 1px;
+  background: var(--ink-3); opacity: .7;
+}
+.pan-dot {
+  position: absolute; z-index: 1; top: 4px; left: calc(6px + (100% - 12px) * var(--p) - 6px);
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--key); box-shadow: 0 0 0 1.5px var(--ink-2), 0 2px 3px var(--key-drop);
+}
+.s-pan.off .pan-dot { background: var(--accent); box-shadow: 0 0 0 1.5px var(--accent), 0 2px 3px var(--key-drop); }
+.pan-val {
+  position: absolute; left: 0; right: 0; bottom: -2px; text-align: center;
+  font-size: 10px; font-weight: 600; line-height: 1; color: var(--ink-3); font-variant-numeric: tabular-nums;
+}
+.s-pan.none { visibility: hidden; }
 
 /* ---------- Knob ---------- */
 .knob {
@@ -350,9 +376,10 @@ button:focus-visible, input:focus-visible, .knob:focus-visible {
       "head  head"
       "fader knob"
       "fader keys"
+      "fader pan"
       "fader val";
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    grid-template-rows: 64px 184px 96px minmax(0, 1fr);
+    grid-template-rows: 64px 184px 96px 48px minmax(0, 1fr);
     column-gap: calc(var(--u) * 2);
     row-gap: calc(var(--u) * 2);
     padding: 0 var(--u);
@@ -365,6 +392,11 @@ button:focus-visible, input:focus-visible, .knob:focus-visible {
   .s-knob .knob { width: 120px; height: 120px; box-shadow: 0 8px 14px var(--key-drop), 0 2px 0 rgba(255,255,255,.35) inset, 0 -3px 0 rgba(0,0,0,.18) inset, 0 0 0 8px var(--ring-1), 0 0 0 9px var(--ring-2); }
   .s-knob-label { font-size: 13px; }
   .s-keys { gap: calc(var(--u) * 2); align-self: center; }
+  .s-pan { width: min(100%, 168px); height: 44px; align-self: center; }
+  .s-pan::before { top: 13px; left: 10px; right: 10px; }
+  .s-pan::after { top: 7px; height: 14px; }
+  .pan-dot { top: 5px; width: 18px; height: 18px; left: calc(10px + (100% - 20px) * var(--p) - 9px); }
+  .pan-val { font-size: 13px; bottom: 0; }
   .key { width: 72px; height: 64px; border-radius: 16px; }
   .key svg { width: 28px; height: 28px; }
   .key.solo { font-size: 15px; }
@@ -397,7 +429,7 @@ button:focus-visible, input:focus-visible, .knob:focus-visible {
 }
 
 @media (orientation: portrait) and (max-height: 720px) {
-  .strip { grid-template-rows: 56px 152px 80px minmax(0, 1fr); row-gap: var(--u); }
+  .strip { grid-template-rows: 56px 152px 80px 44px minmax(0, 1fr); row-gap: var(--u); }
   .s-knob .knob { width: 96px; height: 96px; }
   .key { width: 64px; height: 56px; }
   .s-name { font-size: 36px; }
@@ -488,15 +520,20 @@ button:focus-visible, input:focus-visible, .knob:focus-visible {
 
   .strips { column-gap: var(--u); }
   .strip {
-    grid-template-areas: "knob fader" "keys fader" "val fader" "head head";
+    grid-template-areas: "knob fader" "keys fader" "pan fader" "val fader" "head head";
     grid-template-columns: minmax(0, 1fr) 48px;
-    grid-template-rows: 52px minmax(0, 1fr) 14px 16px;
+    grid-template-rows: 48px minmax(0, 1fr) 26px 14px 16px;
     row-gap: 4px; column-gap: 4px;
   }
   .s-knob { row-gap: 0; }
   .s-knob-label { display: none; }
   .knob { width: 40px; height: 40px; box-shadow: 0 3px 6px var(--key-drop), 0 2px 0 rgba(255,255,255,.35) inset, 0 -2px 0 rgba(0,0,0,.18) inset, 0 0 0 3px var(--ring-1), 0 0 0 4px var(--ring-2); }
   .s-keys { flex-direction: column; gap: 6px; justify-content: center; }
+  .s-pan { width: min(100%, 52px); height: 26px; }
+  .s-pan::before { top: 8px; left: 5px; right: 5px; }
+  .s-pan::after { top: 4px; }
+  .pan-dot { top: 3px; width: 11px; height: 11px; left: calc(5px + (100% - 10px) * var(--p) - 5.5px); }
+  .pan-val { font-size: 9px; }
   .key { width: 44px; height: 36px; border-radius: 10px; box-shadow: 0 3px 0 var(--key-edge), 0 4px 8px var(--key-drop); }
   .key svg { width: 18px; height: 18px; }
   .key::before { top: 4px; left: 4px; width: 5px; height: 5px; }
