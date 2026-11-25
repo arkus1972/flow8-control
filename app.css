@@ -391,7 +391,7 @@ button:focus-visible, input:focus-visible, .knob:focus-visible {
   .strip.sel .s-name { color: var(--ink); }
   .s-knob { align-self: center; row-gap: calc(var(--u) * 1.5); }
   .s-knob .knob { width: 120px; height: 120px; box-shadow: 0 8px 14px var(--key-drop), 0 2px 0 rgba(255,255,255,.35) inset, 0 -3px 0 rgba(0,0,0,.18) inset, 0 0 0 8px var(--ring-1), 0 0 0 9px var(--ring-2); }
-  .s-knob-label { font-size: 13px; }
+  .s-knob-label { font-family: Doto, ui-monospace, monospace; font-weight: 700; font-size: 20px; line-height: 1; color: var(--ink); white-space: nowrap; }
   .s-keys { gap: calc(var(--u) * 2); align-self: center; }
   .s-pan { width: min(100%, 168px); height: 44px; align-self: center; }
   .s-pan::before { top: 13px; left: 10px; right: 10px; }
