@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.8'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.9'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
 
   // ---------- Model ----------
@@ -181,21 +181,37 @@
         optionalServices: [BLE_SVC]
       });
       B.dev = dev;
-      dev.addEventListener('gattserverdisconnected', bleLost);
       setConn('busy');
-      const server = await dev.gatt.connect();
-      const svc = await server.getPrimaryService(BLE_SVC);
-      B.chr = await svc.getCharacteristic(BLE_CHR);
-      B.chr.addEventListener('characteristicvaluechanged', e => bleRx(new Uint8Array(e.target.value.buffer)));
-      await B.chr.startNotifications();
+      // Android often fails the first GATT attempt (FLOW Mix retries too), so try a few times
+      let step = '', lastErr = null;
+      for (let attempt = 1; attempt <= 4; attempt++) {
+        try {
+          step = 'połączenie'; const server = await dev.gatt.connect();
+          await new Promise(r => setTimeout(r, 300));
+          step = 'usługa'; const svc = await server.getPrimaryService(BLE_SVC);
+          step = 'kanał danych'; const chr = await svc.getCharacteristic(BLE_CHR);
+          chr.addEventListener('characteristicvaluechanged', bleOnValue);   // same fn → never doubled
+          step = 'powiadomienia'; await chr.startNotifications();
+          B.chr = chr; lastErr = null;
+          break;
+        } catch (err) {
+          lastErr = err;
+          $('#conn-label').textContent = 'Łączę… próba ' + (attempt + 1);
+          try { dev.gatt.disconnect(); } catch (x) {}
+          await new Promise(r => setTimeout(r, 800 * attempt));
+        }
+      }
+      if (lastErr) throw Object.assign(new Error(step + ': ' + ((lastErr && lastErr.message) || lastErr)), { step });
+      dev.addEventListener('gattserverdisconnected', bleLost);
       // the mixer greets with 0x35; answer anyway if the greeting got lost
       B.hsTimer = setTimeout(bleHello, 1200);
     } catch (e) {
       if (e && e.name === 'NotFoundError') { setConn('idle'); return; }   // picker closed
-      toast('Nie udało się połączyć: ' + ((e && e.message) || e) + '. Zamknij FLOW Mix i spróbuj ponownie.');
+      toast('Nie udało się połączyć (' + ((e && e.message) || e) + '). Zamknij FLOW Mix, wyłącz i włącz Bluetooth, spróbuj ponownie.');
       bleLost();
     }
   }
+  function bleOnValue(e) { bleRx(new Uint8Array(e.target.value.buffer, e.target.value.byteOffset, e.target.value.byteLength)); }
   function bleClientId() {
     let id = null;
     try { id = JSON.parse(localStorage.getItem('flow8-ble-id') || 'null'); } catch (e) {}
@@ -322,7 +338,7 @@
   function toast(msg) {
     const t = $('#toast');
     t.textContent = msg; t.classList.add('show');
-    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), Math.max(2600, msg.length * 70));
   }
   const portrait = () => matchMedia('(orientation: portrait)').matches;
 
