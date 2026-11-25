@@ -1,0 +1,13 @@
+{
+  "name": "FLOW 8 Control",
+  "short_name": "FLOW 8",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#CFCFCB",
+  "theme_color": "#CFCFCB",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

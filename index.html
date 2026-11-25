@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="pl" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#CFCFCB">
+<title>FLOW 8 Control</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Doto:wght@700;900&family=Inter+Tight:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="device" id="device">
+  <section class="display" aria-label="Wyświetlacz">
+    <div class="dots" id="dots" role="tablist" aria-label="Kanały"></div>
+    <div class="readout">
+      <div class="readout-top">
+        <div class="conn">
+          <button class="pill" id="connect" type="button"><span class="led" id="conn-led"></span><span id="conn-label">Połącz z mikserem</span></button>
+          <button class="pill icon" id="sync" type="button" aria-label="Wyślij wszystkie ustawienia do miksera" title="Wyślij wszystko do miksera">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3"/><path d="M18 3v4h-4M6 21v-4h4"/></svg>
+          </button>
+        </div>
+        <span class="readout-bus" id="bus-label">sala</span>
+      </div>
+      <div class="readout-name" id="sel-name">wokal</div>
+      <div class="readout-vals">
+        <span id="sel-level">poziom -∞</span>
+        <span id="sel-gain">gain +0</span>
+      </div>
+    </div>
+  </section>
+
+  <main class="strips" id="strips" aria-label="Kanały miksera"></main>
+
+  <nav class="pager" id="pager" aria-label="Strony kanałów"></nav>
+
+  <footer class="bar">
+    <div class="scenes" role="group" aria-label="Sceny zapisane w mikserze">
+      <span class="bar-label">sceny</span>
+      <div class="scene-keys" id="scenes"></div>
+    </div>
+    <div class="switch" id="buses" role="radiogroup" aria-label="Który miks ustawiasz">
+      <span class="switch-thumb" id="bus-thumb" aria-hidden="true"></span>
+    </div>
+    <div class="tools">
+      <button class="tool metro-btn" id="metro-open" type="button" aria-label="Metronom" aria-expanded="false" aria-controls="metro" title="Metronom">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l4 18H5z"/><path d="M12 15l5-8"/></svg>
+        <span class="beat-led" id="beat-led"></span>
+      </button>
+      <button class="tool" id="theme" type="button" aria-label="Przełącz motyw jasny lub ciemny" title="Motyw">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" class="fill"/></svg>
+      </button>
+    </div>
+  </footer>
+</div>
+<section class="metro" id="metro" aria-label="Metronom" hidden>
+  <div class="metro-screen">
+    <span class="metro-bpm" id="bpm">120</span>
+    <span class="metro-unit">bpm</span>
+    <div class="metro-beats" id="beats" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+  </div>
+  <div class="metro-row tempo">
+    <button class="key wide" id="bpm-down" type="button" aria-label="Wolniej o 1">−</button>
+    <input class="metro-slider" id="bpm-slider" type="range" min="40" max="240" step="1" value="120" aria-label="Tempo w uderzeniach na minutę">
+    <button class="key wide" id="bpm-up" type="button" aria-label="Szybciej o 1">+</button>
+  </div>
+  <div class="metro-row">
+    <button class="key wide" id="bpm-tap" type="button">Wystukaj</button>
+    <button class="key wide" id="meter" type="button" aria-label="Metrum">4/4</button>
+    <button class="key wide go" id="metro-play" type="button" aria-pressed="false">Start</button>
+  </div>
+  <label class="metro-check"><input type="checkbox" id="metro-fx" checked> Wysyłaj tempo do efektu w mikserze</label>
+</section>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>
