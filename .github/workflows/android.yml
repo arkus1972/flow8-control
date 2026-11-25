@@ -46,10 +46,21 @@ jobs:
         run: |
           VER=$(grep -o "APP_VERSION = '[^']*'" app.js | cut -d"'" -f2)
           cp android/app/build/outputs/apk/release/app-release.apk "flow8-control.apk"
-          # keep the release and replace its file: deleting and recreating it failed when GitHub answered 500
+          # keep the release and replace its file; GitHub sometimes answers 5xx here, so retry,
+          # and as a last resort add the file under a versioned name so there is always a download
+          NOTES="Apka na Androida, wersja v$VER. Pobierz plik flow8-control.apk na telefonie i zainstaluj."
           if gh release view android >/dev/null 2>&1; then
-            gh release upload android "flow8-control.apk" --clobber
-            gh release edit android --title "FLOW 8 Control v$VER (Android)" --notes "Apka na Androida, wersja v$VER. Pobierz plik flow8-control.apk na telefonie i zainstaluj." --latest
+            ok=0
+            for n in 1 2 3 4; do
+              if gh release upload android "flow8-control.apk" --clobber; then ok=1; break; fi
+              sleep $((n * 20))
+            done
+            if [ "$ok" = 0 ]; then
+              cp "flow8-control.apk" "flow8-control-v$VER.apk"
+              gh release upload android "flow8-control-v$VER.apk" --clobber
+              NOTES="Apka na Androida, wersja v$VER: plik flow8-control-v$VER.apk (stary plik flow8-control.apk nie dal sie podmienic)."
+            fi
+            gh release edit android --title "FLOW 8 Control v$VER (Android)" --notes "$NOTES" --latest || true
           else
-            gh release create android "flow8-control.apk" --title "FLOW 8 Control v$VER (Android)" --notes "Apka na Androida, wersja v$VER. Pobierz plik flow8-control.apk na telefonie i zainstaluj." --latest
+            gh release create android "flow8-control.apk" --title "FLOW 8 Control v$VER (Android)" --notes "$NOTES" --latest
           fi
