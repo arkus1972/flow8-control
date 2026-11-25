@@ -530,9 +530,10 @@ button:focus-visible, input:focus-visible, .knob:focus-visible {
   .knob { width: 40px; height: 40px; box-shadow: 0 3px 6px var(--key-drop), 0 2px 0 rgba(255,255,255,.35) inset, 0 -2px 0 rgba(0,0,0,.18) inset, 0 0 0 3px var(--ring-1), 0 0 0 4px var(--ring-2); }
   .s-keys { flex-direction: column; gap: 6px; justify-content: center; }
   .s-pan { width: min(100%, 52px); height: 26px; }
-  .s-pan::before { top: 8px; left: 5px; right: 5px; }
-  .s-pan::after { top: 4px; }
-  .pan-dot { top: 3px; width: 11px; height: 11px; left: calc(5px + (100% - 10px) * var(--p) - 5.5px); }
+  .s-pan::before { top: 8px; left: 5px; right: 5px; height: 1px; }
+  .s-pan::after { top: 5px; height: 7px; width: 1px; left: calc(50% - .5px); }
+  .pan-dot { top: 4.5px; width: 8px; height: 8px; left: calc(5px + (100% - 10px) * var(--p) - 4px); box-shadow: 0 0 0 1px var(--ink-2); }
+  .s-pan.off .pan-dot { box-shadow: 0 0 0 1px var(--accent); }
   .pan-val { font-size: 9px; }
   .key { width: 44px; height: 36px; border-radius: 10px; box-shadow: 0 3px 0 var(--key-edge), 0 4px 8px var(--key-drop); }
   .key svg { width: 18px; height: 18px; }
