@@ -20,7 +20,11 @@
     <div class="readout">
       <div class="readout-top">
         <div class="conn">
-          <button class="pill" id="connect" type="button"><span class="led" id="conn-led"></span><span id="conn-label">Połącz z mikserem</span></button>
+          <button class="pill" id="connect" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="conn-menu"><span class="led" id="conn-led"></span><span id="conn-label">Połącz z mikserem</span></button>
+          <div class="conn-menu" id="conn-menu" hidden>
+            <button class="key wide" id="conn-ble" type="button">Bluetooth</button>
+            <button class="key wide" id="conn-usb" type="button">Kabel USB</button>
+          </div>
           <button class="pill icon" id="sync" type="button" aria-label="Wyślij wszystkie ustawienia do miksera" title="Wyślij wszystko do miksera">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3"/><path d="M18 3v4h-4M6 21v-4h4"/></svg>
           </button>

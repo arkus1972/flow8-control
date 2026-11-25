@@ -1,20 +1,20 @@
-/* FLOW 8 Control: Web MIDI remote for the Behringer FLOW 8.
- * MIDI map from the FLOW 8 manual (MIDI Implementation). The mixer only RECEIVES MIDI,
- * so the app keeps its own state (saved on the device) and can resend everything with "sync". */
+/* FLOW 8 Control: remote for the Behringer FLOW 8.
+ * Two links: Bluetooth LE (two-way, protocol read from a FLOW Mix HCI log) and USB MIDI
+ * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.3'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.4'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
 
   // ---------- Model ----------
   const CHANNELS = [
-    { name: 'wokal',    num: '1',   midi: 1, gain: true,  cap: '#E8501A', mark: '#FFFFFF', glyph: 'M15 4a5 5 0 0 1 5 5v5a5 5 0 0 1-10 0V9a5 5 0 0 1 5-5zM15 24v3' },
-    { name: 'chórek',   num: '2',   midi: 2, gain: true,  cap: '#2F5BEA', mark: '#FFFFFF', glyph: 'M6 15a9 9 0 1 0 18 0a9 9 0 1 0-18 0' },
-    { name: 'gitara',   num: '3',   midi: 3, gain: true,  cap: '#F4F4F1', mark: '#1C1C1C', glyph: 'M5 25L15 5l10 20z' },
-    { name: 'bas',      num: '4',   midi: 4, gain: true,  cap: '#1C1C1C', mark: '#FFFFFF', glyph: 'M6 6h18v18H6z' },
-    { name: 'klawisze', num: '5/6', midi: 5, gain: true,  cap: '#A3A39E', mark: '#1C1C1C', glyph: 'M4 10h22M4 15h22M4 20h22' },
-    { name: 'podkład',  num: '7/8', midi: 6, gain: true,  cap: '#F4F4F1', mark: '#E8501A', glyph: 'M4 15q5.5-10 11 0t11 0' },
-    { name: 'telefon',  num: 'USB', midi: 7, gain: false, cap: '#2F5BEA', mark: '#FFFFFF', glyph: 'M10 4h10v22H10zM13 22h4' },
+    { name: 'wokal',    num: '1',   midi: 1, ble: 0, gain: true,  cap: '#E8501A', mark: '#FFFFFF', glyph: 'M15 4a5 5 0 0 1 5 5v5a5 5 0 0 1-10 0V9a5 5 0 0 1 5-5zM15 24v3' },
+    { name: 'chórek',   num: '2',   midi: 2, ble: 1, gain: true,  cap: '#2F5BEA', mark: '#FFFFFF', glyph: 'M6 15a9 9 0 1 0 18 0a9 9 0 1 0-18 0' },
+    { name: 'gitara',   num: '3',   midi: 3, ble: 2, gain: true,  cap: '#F4F4F1', mark: '#1C1C1C', glyph: 'M5 25L15 5l10 20z' },
+    { name: 'bas',      num: '4',   midi: 4, ble: 3, gain: true,  cap: '#1C1C1C', mark: '#FFFFFF', glyph: 'M6 6h18v18H6z' },
+    { name: 'klawisze', num: '5/6', midi: 5, ble: 4, gain: true,  cap: '#A3A39E', mark: '#1C1C1C', glyph: 'M4 10h22M4 15h22M4 20h22' },
+    { name: 'podkład',  num: '7/8', midi: 6, ble: 5, gain: true,  cap: '#F4F4F1', mark: '#E8501A', glyph: 'M4 15q5.5-10 11 0t11 0' },
+    { name: 'telefon',  num: 'USB', midi: 7, ble: 6, gain: false, cap: '#2F5BEA', mark: '#FFFFFF', glyph: 'M10 4h10v22H10zM13 22h4' },
     { name: 'main',     num: 'OUT', midi: 0, gain: false, cap: '#1C1C1C', mark: '#E8501A', glyph: '', master: true }
   ];
   const BUSES = [
@@ -74,14 +74,15 @@
   const pc = (ch, prog) => send([0xC0 + ch - 1, prog], true);
 
   function sendLevel(i, force) {
+    if (B.ready) return bleLevel(i);
     const bus = BUSES[S.bus];
     const v = S.levels[S.bus][i];
     if (CHANNELS[i].master) cc(bus.midi, CC.level, v, force);
     else cc(CHANNELS[i].midi, bus.sendCC, v, force);
   }
-  const sendGain = (i, f) => CHANNELS[i].gain && cc(CHANNELS[i].midi, CC.gain, S.gains[i], f);
-  const sendMute = (i, f) => !CHANNELS[i].master && cc(CHANNELS[i].midi, CC.mute, S.mutes[i] ? 127 : 0, f);
-  const sendSolo = (i, f) => !CHANNELS[i].master && cc(CHANNELS[i].midi, CC.solo, S.solos[i] ? 127 : 0, f);
+  const sendGain = (i, f) => B.ready ? bleGain(i) : CHANNELS[i].gain && cc(CHANNELS[i].midi, CC.gain, S.gains[i], f);
+  const sendMute = (i, f) => B.ready ? bleMute(i) : !CHANNELS[i].master && cc(CHANNELS[i].midi, CC.mute, S.mutes[i] ? 127 : 0, f);
+  const sendSolo = (i, f) => B.ready ? bleSolo(i) : !CHANNELS[i].master && cc(CHANNELS[i].midi, CC.solo, S.solos[i] ? 127 : 0, f);
 
   function sendAll() {
     CHANNELS.forEach((c, i) => {
@@ -92,6 +93,162 @@
         sendGain(i, true); sendMute(i, true); sendSolo(i, true);
       }
     });
+  }
+
+
+  // ---------- Bluetooth LE ----------
+  // Frame: [cmd][1][payload…][sum8]; multi-fragment: [cmd][count][seq][idx][payload…][sum8].
+  // The mixer echoes accepted writes and pushes moves of its own faders (cmd 0x06).
+  const BLE_SVC = '14839ad4-8d7e-415c-9a42-167340cf2339';
+  const BLE_CHR = '0034594a-a8e7-4b1a-a6b1-cd5243059a57';
+  const DST_MAIN = 0x0f;
+  const B = { dev: null, chr: null, ready: false, pending: new Map(), busy: false, frags: new Map(), touched: new Map(), hsTimer: 0 };
+  const frame = (cmd, payload) => {
+    const b = [cmd, 1, ...payload];
+    b.push(b.reduce((a, x) => a + x, 0) & 255);
+    return new Uint8Array(b);
+  };
+  // latest value wins: a fast fader drag never builds a backlog
+  function bleQueue(key, cmd, payload) {
+    if (!B.chr) return;
+    B.pending.delete(key);
+    B.pending.set(key, frame(cmd, payload));
+    bleFlush();
+  }
+  async function bleFlush() {
+    if (B.busy || !B.chr) return;
+    const next = B.pending.entries().next();
+    if (next.done) return;
+    const [key, data] = next.value;
+    B.pending.delete(key);
+    B.busy = true;
+    try {
+      await (B.chr.writeValueWithResponse ? B.chr.writeValueWithResponse(data) : B.chr.writeValue(data));
+    } catch (e) {
+      if (!B.dev || !B.dev.gatt.connected) { bleLost(); return; }
+    }
+    B.busy = false;
+    bleFlush();
+  }
+  const pos255 = v => Math.max(0, Math.min(255, Math.round(v * 255 / 127)));
+  const gainByte = g => 0x50 + Math.round(g * 160 / 127);   // 0x50..0xF0 seen in FLOW Mix
+  function bleLevel(i) {
+    const c = CHANNELS[i];
+    if (c.master || S.bus !== 0) {                  // ids for MAIN / monitor / FX buses not known yet
+      toastOnce('ble-bus', 'Przez Bluetooth na razie działają suwaki kanałów w miksie „sala”.');
+      return;
+    }
+    B.touched.set(c.ble, performance.now());
+    bleQueue('l' + i, 0x06, [c.ble, DST_MAIN, pos255(S.levels[0][i])]);
+  }
+  function bleGain(i) {
+    const c = CHANNELS[i];
+    if (!c.gain || c.master) return;
+    B.touched.set('g' + c.ble, performance.now());
+    bleQueue('g' + i, 0x02, [c.ble, gainByte(S.gains[i])]);
+  }
+  function bleMute(i) { const c = CHANNELS[i]; if (!c.master) bleQueue('m' + i, 0x08, [c.ble, S.mutes[i] ? 1 : 0]); }
+  function bleSolo(i) { const c = CHANNELS[i]; if (!c.master) bleQueue('s' + i, 0x01, [c.ble, S.solos[i] ? 1 : 0]); }
+  function bleSendAll() {
+    CHANNELS.forEach((c, i) => {
+      if (c.master) return;
+      if (S.bus === 0) bleLevel(i);
+      bleGain(i); bleMute(i); bleSolo(i);
+    });
+  }
+  const toasted = new Set();
+  function toastOnce(k, msg) { if (!toasted.has(k)) { toasted.add(k); toast(msg); } }
+
+  async function bleConnect() {
+    if (!navigator.bluetooth) {
+      toast('Ta przeglądarka nie obsługuje Bluetooth. Użyj Chrome na Androidzie.');
+      return;
+    }
+    try {
+      const dev = await navigator.bluetooth.requestDevice({
+        filters: [{ services: [BLE_SVC] }, { namePrefix: 'FLOW' }, { namePrefix: 'Flow' }],
+        optionalServices: [BLE_SVC]
+      });
+      B.dev = dev;
+      dev.addEventListener('gattserverdisconnected', bleLost);
+      setConn('busy');
+      const server = await dev.gatt.connect();
+      const svc = await server.getPrimaryService(BLE_SVC);
+      B.chr = await svc.getCharacteristic(BLE_CHR);
+      B.chr.addEventListener('characteristicvaluechanged', e => bleRx(new Uint8Array(e.target.value.buffer)));
+      await B.chr.startNotifications();
+      // the mixer greets with 0x35; answer anyway if the greeting got lost
+      B.hsTimer = setTimeout(bleHello, 1200);
+    } catch (e) {
+      if (e && e.name === 'NotFoundError') { setConn('idle'); return; }   // picker closed
+      toast('Nie udało się połączyć: ' + ((e && e.message) || e) + '. Zamknij FLOW Mix i spróbuj ponownie.');
+      bleLost();
+    }
+  }
+  function bleClientId() {
+    let id = null;
+    try { id = JSON.parse(localStorage.getItem('flow8-ble-id') || 'null'); } catch (e) {}
+    if (!Array.isArray(id) || id.length !== 16) {
+      id = Array.from(crypto.getRandomValues(new Uint8Array(16)));
+      try { localStorage.setItem('flow8-ble-id', JSON.stringify(id)); } catch (e) {}
+    }
+    return id;
+  }
+  function bleHello() {
+    clearTimeout(B.hsTimer);
+    bleQueue('hello', 0x39, bleClientId());
+  }
+  function bleRx(b) {
+    if (b.length < 3) return;
+    if ((b.slice(0, -1).reduce((a, x) => a + x, 0) & 255) !== b[b.length - 1]) return;   // bad checksum
+    const cmd = b[0], count = b[1];
+    let p;
+    if (count <= 1) p = b.slice(2, -1);
+    else {
+      const key = cmd + ':' + b[2], parts = B.frags.get(key) || [];
+      parts[b[3]] = b.slice(4, -1); B.frags.set(key, parts);
+      if (parts.filter(Boolean).length < count) return;
+      B.frags.delete(key);
+      p = new Uint8Array(parts.reduce((a, x) => a.concat(Array.from(x)), []));
+    }
+    bleHandle(cmd, p);
+  }
+  function bleHandle(cmd, p) {
+    const idx = id => CHANNELS.findIndex(c => c.ble === id);
+    const now = performance.now();
+    switch (cmd) {
+      case 0x35: bleHello(); break;                               // HandshakeHost
+      case 0x36:                                                  // handshake accepted
+        bleQueue('state', 0x37, []);                              // GetMixerState
+        if (!B.ready) {
+          B.ready = true; setConn('ble');
+          toast('Połączono przez Bluetooth. Rusz suwakiem na mikserze, a aplikacja go pokaże.');
+        }
+        break;
+      case 0x06: {                                                // fader (echo or moved on the mixer)
+        const i = idx(p[0]);
+        if (i < 0 || p[1] !== DST_MAIN) break;
+        if (now - (B.touched.get(p[0]) || 0) < 400) break;        // ignore echoes while the user drags
+        S.levels[0][i] = Math.round(p[2] * 127 / 255);
+        render(); save(); break;
+      }
+      case 0x02: {                                                // gain
+        const i = idx(p[0]);
+        if (i < 0 || now - (B.touched.get('g' + p[0]) || 0) < 400) break;
+        S.gains[i] = Math.max(0, Math.min(127, Math.round((p[1] - 0x50) * 127 / 160)));
+        render(); save(); break;
+      }
+      case 0x08: { const i = idx(p[0]); if (i >= 0) { S.mutes[i] = !!p[1]; render(); save(); } break; }
+      case 0x01: { const i = idx(p[0]); if (i >= 0) { S.solos[i] = !!p[1]; render(); save(); } break; }
+    }
+  }
+  function bleLost() {
+    clearTimeout(B.hsTimer);
+    const was = B.ready;
+    Object.assign(B, { chr: null, ready: false, busy: false });
+    B.pending.clear(); B.frags.clear();
+    setConn('idle');
+    if (was) toast('Rozłączono Bluetooth.');
   }
 
   async function connect() {
@@ -123,9 +280,12 @@
   }
   function setConn(state, name) {
     const led = $('#conn-led'), label = $('#conn-label');
-    led.className = 'led' + (state === 'ok' ? ' ok' : state === 'demo' || state === 'other' ? ' demo' : '');
+    if (B.ready && state !== 'ble') state = 'ble';
+    led.className = 'led' + (state === 'ok' || state === 'ble' ? ' ok' : state === 'demo' || state === 'other' || state === 'busy' ? ' demo' : '');
     label.textContent =
-      state === 'ok' ? 'FLOW 8 połączony' :
+      state === 'ble' ? 'FLOW 8 · Bluetooth' :
+      state === 'busy' ? 'Łączę przez Bluetooth…' :
+      state === 'ok' ? 'FLOW 8 · kabel USB' :
       state === 'other' ? 'Nie widzę FLOW 8, podłącz USB' :
       state === 'error' ? 'Błąd wysyłania, podłącz ponownie' :
       access ? 'Tryb demo, podłącz mikser USB' : 'Połącz z mikserem';
@@ -264,9 +424,19 @@
       buses.appendChild(btn);
     });
 
-    $('#connect').addEventListener('click', connect);
+    const menu = $('#conn-menu'), cbtn = $('#connect');
+    const closeMenu = () => { menu.hidden = true; cbtn.setAttribute('aria-expanded', 'false'); };
+    cbtn.addEventListener('click', e => {
+      e.stopPropagation();
+      if (B.ready) { if (confirmDisconnect()) return; }
+      menu.hidden = !menu.hidden; cbtn.setAttribute('aria-expanded', menu.hidden ? 'false' : 'true');
+    });
+    $('#conn-ble').addEventListener('click', () => { closeMenu(); bleConnect(); });
+    $('#conn-usb').addEventListener('click', () => { closeMenu(); connect(); });
+    document.addEventListener('click', e => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(); });
     $('#sync').addEventListener('click', () => {
-      if (!out) { toast('Najpierw połącz mikser kablem USB.'); return; }
+      if (B.ready) { bleSendAll(); toast('Wysłano ustawienia do miksera przez Bluetooth'); return; }
+      if (!out) { toast('Najpierw połącz się z mikserem.'); return; }
       sendAll(); toast('Wysłano wszystkie ustawienia do miksera');
     });
     $('#theme').addEventListener('click', () => { S.theme = S.theme === 'dark' ? 'light' : 'dark'; render(); save(); });
@@ -282,6 +452,12 @@
       }, 60);
     }, { passive: true });
     window.addEventListener('resize', () => { if (portrait()) scrollToSel(false); });
+  }
+
+  function confirmDisconnect() {
+    if (!B.dev || !B.dev.gatt.connected) return false;
+    B.dev.gatt.disconnect();
+    return true;
   }
 
   function bindKnob(knob, i) {
