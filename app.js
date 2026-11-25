@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.47'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.48'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -36,6 +36,7 @@
   const fresh = () => ({
     theme: (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light',
     bus: 0, sel: 0, scene: 0,
+    icons: CHANNELS.map(() => 0), lim: [0, 0, 0], dly: [0, 0, 0], cfg: {}, tempo: 120, hp: null, scope: 31,
     names: CHANNELS.map(c => c.name),
     // levels[bus][channel], 0..127 (MIDI value). Index 7 = that bus's master.
     levels: BUSES.map((b, bi) => CHANNELS.map((c, i) => (bi === 0 ? (i === 7 ? 100 : 90) : (i === 7 ? 100 : 0)))),
@@ -61,6 +62,7 @@
     if (saved && saved.levels && saved.levels.length === BUSES.length) S = Object.assign(S, saved);
     if (!Array.isArray(S.pans) || S.pans.length !== CHANNELS.length) S.pans = CHANNELS.map(() => 0);
     const f0 = fresh();
+    ['icons', 'lim', 'dly', 'cfg', 'tempo', 'scope'].forEach(k => { if (S[k] === undefined || S[k] === null) S[k] = f0[k]; });
     ['eq', 'eqF', 'eqQ', 'hpf', 'comp', 'p48', 'phase'].forEach(k => { if (!Array.isArray(S[k]) || S[k].length !== CHANNELS.length) S[k] = f0[k]; });
     if (!Array.isArray(S.fx) || S.fx.length !== 2) S.fx = f0.fx;
     if (!Array.isArray(S.geq) || S.geq.length !== 3) S.geq = f0.geq;
@@ -210,6 +212,22 @@
   function bleFxPreset(n) {
     bleQueue('xp' + n, 0x31, [0x0c + n, S.fx[n].preset]);
     setTimeout(() => bleQueue('state', 0x37, []), 400);          // the new program brings its own parameter values
+  }
+  // ----- mixer settings, routing, snapshots, labels, limiter (formats read from the FLOW Mix command table) -----
+  // 0x25 Setting = [id][len=1][value]; ids: 2 BT/USB play to phones only, 3 foot switch (1 = snapshots, 0 = FX mute/tap),
+  // 7 USB streaming mode, 8 MON 1/2 source (0 mon, 1 USB 1/2, 2 USB 3/4), 9 ch 5/6 = USB 1/2, 10 ch 7/8 = USB 3/4,
+  // 11 monitor stereo link, 12 phones from monitor, 13 phones post fader, 14 main -10 dBV pad, 15 monitor pad, 17 monitor post fader
+  const utf8 = t => Array.from(new TextEncoder().encode(t)).slice(0, 20);
+  const text8 = b => { try { return new TextDecoder().decode(new Uint8Array(b)); } catch (e) { return String.fromCharCode(...b); } };
+  function bleSetting(id, val) { S.cfg[id] = val; B.touched.set('s' + id, performance.now()); bleQueue('s' + id, 0x25, [id, 1, val]); }
+  function bleLimiter(bi) { B.touched.set('lim' + bi, performance.now()); bleQueue('lim' + bi, 0x14, [BUSES[bi].dst, Math.max(0x3c, Math.min(0x78, Math.round((S.lim[bi] + 60) * 2)))]); }
+  function bleLabel(i) { const c = CHANNELS[i]; if (c.master) return; const t = utf8(S.names[i]); bleQueue('lab' + i, 0x05, [c.ble, S.icons[i] >> 8 & 255, S.icons[i] & 255, t.length, ...t]); }
+  function bleTempo() { bleQueue('tempo', 0x40, [S.tempo >> 8 & 255, S.tempo & 255]); }
+  const bleSnapList = () => bleQueue('snaps', 0x07, []);
+  function bleSnap(cmd, slot, name) {
+    const t = name === undefined ? [] : utf8(name);
+    bleQueue('snap' + cmd + ':' + slot, cmd, name === undefined ? [slot] : [slot, t.length, ...t]);
+    setTimeout(bleSnapList, 500);
   }
   const bleFlag = (i, cmd, on) => { if (!CHANNELS[i].master) bleQueue('f' + cmd + ':' + i, cmd, [CHANNELS[i].ble, on ? 1 : 0]); };
   function bleGain(i) {
@@ -379,8 +397,8 @@
       }
       case 0x27: {                                                // snapshot list: [len][name]…
         const names = []; let k = 0;
-        while (k < p.length && p[k]) { names.push(String.fromCharCode(...p.slice(k + 1, k + 1 + p[k]))); k += 1 + p[k]; }
-        B.snapshots = names; break;
+        while (k < p.length && names.length < 15) { names.push(text8(p.slice(k + 1, k + 1 + p[k]))); k += 1 + p[k]; }   // an empty slot is a zero length
+        B.snapshots = names; chanRender(); break;
       }
       case 0x02: {                                                // gain
         const i = idx(p[0]);
@@ -425,11 +443,33 @@
       case 0x10: { const i = idx(p[0]); if (i >= 0) { S.phase[i] = !!p[1]; render(); save(); } break; }
       case 0x08: { const i = idx(p[0]); if (i >= 0) { S.mutes[i] = !!p[1]; render(); save(); } break; }
       case 0x01: { const i = idx(p[0]); if (i >= 0) { S.solos[i] = !!p[1]; render(); save(); } break; }
+      case 0x25: {                                                // setting: [id][len][value]
+        if (p[1] === 1 && now - (B.touched.get('s' + p[0]) || 0) > 400) { S.cfg[p[0]] = p[2]; chanRender(); save(); }
+        break;
+      }
+      case 0x14: {                                                // output limiter: [bus][byte], dB = byte / 2 - 60
+        const bi = BUSES.findIndex(x => x.dst === p[0]);
+        if (bi >= 0 && bi < 3 && now - (B.touched.get('lim' + bi) || 0) > 400) { S.lim[bi] = p[1] / 2 - 60; chanRender(); save(); }
+        break;
+      }
+      case 0x4a: {                                                // output delay: [bus][u32 samples at 48 kHz]
+        const bi = BUSES.findIndex(x => x.dst === p[0]);
+        if (bi >= 0 && bi < 3) { S.dly[bi] = ((p[1] << 24 | p[2] << 16 | p[3] << 8 | p[4]) >>> 0) / 48; chanRender(); save(); }
+        break;
+      }
+      case 0x05: {                                                // channel label: [id][icon u16][len][text]
+        const i = idx(p[0]);
+        if (i >= 0 && p[3]) { S.icons[i] = p[1] << 8 | p[2]; S.names[i] = text8(p.slice(4, 4 + p[3])); render(); save(); }
+        break;
+      }
+      case 0x40: { S.tempo = p[0] << 8 | p[1]; chanRender(); save(); break; }
       case 0x38: bleMixerState(p); break;                         // full state (after connect / scene load)
       case 0x22: {                                                // meters: 15 values, same byte→dB law as faders (FLOW Mix)
         const v = Array.from(p.slice(0, 15)), mx = (a, b) => Math.max(v[a] || 0, v[b] || 0);
         B.meters = [v[0], v[1], v[2], v[3], mx(4, 5), mx(6, 7), mx(8, 9), mx(10, 11)]; B.meterAt = now;
         B.meterN = (B.meterN || 0) + 1; B.meterLast = Array.from(p); B.meterMax = Array.from(p).map((x, k) => Math.max(x, (B.meterMax || [])[k] || 0));
+        B.gr = p.length >= 17 ? p[15] << 8 | p[16] : 0;           // 2 bits per input channel (0-3), top 2 bits = outputs
+        if (chanOpen >= 0 || document.getElementById('sub')) chanRender();
         renderMeters(); break;
       }
     }
@@ -441,10 +481,11 @@
   function bleMixerState(p) {
     let k = 0;
     const gains = [];
-    const flags = [], pans = [], recs = [];
+    const flags = [], pans = [], recs = [], labels = [], icons = [];
     for (let ch = 0; ch < 7; ch++) {
       if (p[k] !== ch || k + 27 > p.length) return;               // layout not as expected: ignore
       recs[ch] = p.slice(k, k + 27);   // +3 squeezer, +4 low cut u16, +7 EQ gains, +11 EQ freqs u16, +19 EQ Q
+      labels[ch] = p[k + 26] ? text8(p.slice(k + 27, k + 27 + p[k + 26])) : ''; icons[ch] = p[k + 23 + 1] << 8 | p[k + 23 + 2];
       gains[ch] = p[k + 2]; flags[ch] = p[k + 1]; pans[ch] = p[k + 6];               // flags: bit0 mute, bit6 solo (as in FLOW Mix)
       k += 27 + p[k + 26];
     }
@@ -461,8 +502,16 @@
           const f = p[k + 21 + 2 * b] << 8 | p[k + 22 + 2 * b];
           S.geq[bi].g[b] = eqDb(p[k + 12 + b]); if (f) { S.geq[bi].f[b] = f; S.geq[bi].q[b] = p[k + 39 + b]; }
         }
+        if (bi < 3) { S.lim[bi] = Math.max(-30, Math.min(0, p[k + 4] / 2 - 60)); S.dly[bi] = ((p[k + 48] << 24 | p[k + 49] << 16 | p[k + 50] << 8 | p[k + 51]) >>> 0) / 48; }
         master[bi] = p[k + 2]; if (id === 0x0f) { mainMute = !!(p[k + 1] & 1); mainPan = p[k + 3]; } lv[bi] = Array.from(p.slice(k + 5, k + 12)); k += 52;
       }
+    }
+    if (p.length - k >= 9) {            // settings tail: phones volume, two bytes of switches, FX tempo, selected bus, last snapshot, MON source, snapshot scope
+      const a = p[k + 1], b = p[k + 2];
+      S.hp = p[k];
+      Object.assign(S.cfg, { 1: a & 1, 2: a >> 1 & 1, 3: a >> 2 & 1, 7: a >> 4 & 1, 9: a >> 5 & 1, 10: a >> 6 & 1, 11: a >> 7 & 1, 12: b & 1, 13: b >> 1 & 1, 14: b >> 2 & 1, 15: b >> 3 & 1, 17: b >> 4 & 1, 8: p[k + 7] });
+      S.tempo = p[k + 3] << 8 | p[k + 4]; S.scope = p[k + 8];
+      const last = p[k + 6] > 127 ? -1 : p[k + 6]; if (last >= 0) S.scene = last;
     }
     const to127 = x => x * 127 / 255;
     CHANNELS.forEach((c, i) => {
@@ -470,6 +519,7 @@
       if (c.gain) S.gains[i] = Math.max(0, Math.min(127, (gains[c.ble] - 0x50) * 127 / 160));
       S.mutes[i] = !!(flags[c.ble] & 1); S.solos[i] = !!(flags[c.ble] & 0x40); S.pans[i] = panFrom(pans[c.ble]);
       const r = recs[c.ble];
+      if (labels[c.ble]) S.names[i] = labels[c.ble]; S.icons[i] = icons[c.ble] || 0;
       S.phase[i] = !!(flags[c.ble] & 4); S.p48[i] = !!(flags[c.ble] & 8);
       S.comp[i] = Math.round(r[3] * 100 / 255); S.hpf[i] = Math.max(20, Math.min(600, r[4] << 8 | r[5]));
       for (let b = 0; b < 4; b++) {
@@ -706,6 +756,8 @@
       if (!out) { toast('Najpierw połącz się z mikserem.'); return; }
       sendAll(); toast('Wysłano wszystkie ustawienia do miksera');
     });
+    $('#open-setup').addEventListener('click', () => { closeMenu(); openSetup(); });
+    $('#open-scenes').addEventListener('click', () => { closeMenu(); openScenes(); });
     $('#sel-level').addEventListener('click', () => askLevel(S.sel));
     $('#sel-gain').addEventListener('click', () => CHANNELS[S.sel].gain ? askGain(S.sel) : askPan(S.sel));
     const ck = $('#click-toggle'), ckText = () => { ck.textContent = 'Dźwięki i wibracja: ' + (S.click === false ? 'wyłączone' : 'włączone'); };
@@ -900,7 +952,7 @@
       row('kompresor', {
         get: () => S.comp[i] / 100,
         set: p => { S.comp[i] = Math.round(p * 100); bleComp(i); },
-        text: () => S.comp[i] + ' %',
+        text: () => { const g = B.ready ? (B.gr || 0) >> (CHANNELS[i].ble * 2) & 3 : 0; return (g ? '•'.repeat(g) + ' ' : '') + S.comp[i] + ' %'; },   // dots = gain reduction right now (0-3)
         ask: () => askNum('Kompresor (%)', String(S.comp[i]), 'Od 0 do 100.', 0, 100, d => { S.comp[i] = Math.round(d); bleComp(i); })
       })
     ]);
@@ -940,6 +992,94 @@
     const body = el('div', 'chan-body');
     page.append(head, body); $('#device').append(page);
     return body;
+  }
+
+  // ----- Mixer setup: routing and configuration, as on the FLOW Mix settings screens -----
+  const grp = (body, title) => { const g = el('div', 'chan-group'); const h = el('div', 'chan-title'); h.textContent = title; g.append(h); body.append(g); return g; };
+  // one setting = a label and two or three keys; the lit key is the current value
+  function choice(g, label, get, set, opts) {
+    const r = el('div', 'cfg-row'), l = el('span', 'chan-label'), box = el('div', 'cfg-keys');
+    l.textContent = label; r.append(l, box);
+    opts.forEach(([text, val]) => {
+      const b = el('button', 'chan-switch small', { type: 'button', 'aria-pressed': 'false' }); b.textContent = text;
+      b.addEventListener('click', () => { set(val); chanRender(); save(); });
+      subRows.push(() => b.setAttribute('aria-pressed', get() === val ? 'true' : 'false'));
+      box.append(b);
+    });
+    g.append(r);
+  }
+  const cfg = (g, label, id, opts) => choice(g, label, () => S.cfg[id] ? (S.cfg[id] > 1 ? S.cfg[id] : 1) : 0, v => bleSetting(id, v), opts);
+  function openSetup() {
+    const body = subPage('ustawienia', 'mikser');
+    const row = (label, o) => mkRow(label, o, subRows);
+    let g = grp(body, 'wyjścia');
+    [0, 1, 2].forEach(bi => g.append(row('limiter ' + BUSES[bi].short, {
+      get: () => (S.lim[bi] + 30) / 30,
+      set: p => { S.lim[bi] = Math.round((p * 30 - 30) * 2) / 2; bleLimiter(bi); },
+      text: () => { const gr = B.ready && bi === 0 ? (B.gr || 0) >> 14 & 3 : 0; return (gr ? '•'.repeat(gr) + ' ' : '') + fmt(S.lim[bi]).replace(',0', '') + ' dB'; },   // dots = limiter working right now
+      ask: () => askNum('Limiter ' + BUSES[bi].short + ' (dB)', fmt(S.lim[bi]).replace('+', ''), 'Od -30 do 0, co 0,5 dB.', -30, 0, d => { S.lim[bi] = Math.round(d * 2) / 2; bleLimiter(bi); })
+    })));
+    cfg(g, 'wyjście sala', 14, [['+4 dBu', 0], ['-10 dBV', 1]]);
+    cfg(g, 'wyjścia mon', 15, [['+4 dBu', 0], ['-10 dBV', 1]]);
+    const d = el('div', 'cfg-note'); subRows.push(() => { d.textContent = 'opóźnienie: sala ' + fmt(S.dly[0]).replace('+', '') + ' ms, mon 1 ' + fmt(S.dly[1]).replace('+', '') + ' ms, mon 2 ' + fmt(S.dly[2]).replace('+', '') + ' ms'; }); g.append(d);
+
+    g = grp(body, 'odsłuchy i słuchawki');
+    cfg(g, 'monitory', 17, [['pre', 0], ['post', 1]]);
+    cfg(g, 'mon 1 i 2', 11, [['osobno', 0], ['para stereo', 1]]);
+    cfg(g, 'słuchawki z', 12, [['sali', 0], ['monitora', 1]]);
+    cfg(g, 'słuchawki', 13, [['pre', 0], ['post', 1]]);
+
+    g = grp(body, 'usb i bluetooth');
+    cfg(g, 'tryb usb', 7, [['nagrywanie', 0], ['streaming', 1]]);
+    cfg(g, 'kanał 5/6', 9, [['wejście', 0], ['usb 1/2', 1]]);
+    cfg(g, 'kanał 7/8', 10, [['wejście', 0], ['usb 3/4', 1]]);
+    cfg(g, 'wyjścia mon', 8, [['monitory', 0], ['usb 1/2', 1], ['usb 3/4', 2]]);
+    cfg(g, 'bt/usb gra', 2, [['do miksu', 0], ['tylko słuchawki', 1]]);
+
+    g = grp(body, 'efekty');
+    [0, 1].forEach(n => {
+      const r = el('div', 'cfg-row'), l = el('span', 'chan-label'), box = el('div', 'cfg-keys'); l.textContent = 'fx ' + (n + 1) + ' gra na'; r.append(l, box);
+      [['sala', 2], ['mon 1', 4], ['mon 2', 8]].forEach(([t, bit]) => {
+        const b = el('button', 'chan-switch small', { type: 'button', 'aria-pressed': 'false' }); b.textContent = t;
+        b.addEventListener('click', () => { S.fx[n].en ^= bit; bleFxSetup(n); chanRender(); save(); });
+        subRows.push(() => b.setAttribute('aria-pressed', S.fx[n].en & bit ? 'true' : 'false')); box.append(b);
+      });
+      g.append(r);
+    });
+    g.append(row('tempo', {
+      get: () => (Math.max(40, Math.min(240, S.tempo)) - 40) / 200,
+      set: p => { S.tempo = Math.round(40 + p * 200); bleTempo(); },
+      text: () => S.tempo + ' bpm',
+      ask: () => askNum('Tempo efektów (bpm)', String(S.tempo), 'Od 40 do 240.', 40, 240, x => { S.tempo = Math.round(x); bleTempo(); })
+    }));
+    cfg(g, 'przełącznik nożny', 3, [['efekty', 0], ['sceny', 1]]);
+    chanRender();
+  }
+
+  // ----- Scenes: the mixer's 15 snapshot slots (load, save here, rename, delete) -----
+  function openScenes() {
+    const body = subPage('sceny', 'mikser');
+    const g = grp(body, 'pamięć miksera');
+    if (B.ready) bleSnapList();
+    for (let n = 0; n < 15; n++) {
+      const r = el('div', 'cfg-row scene-row'), num = el('span', 'chan-num'), nm = el('span', 'chan-label'), box = el('div', 'cfg-keys');
+      num.textContent = n + 1;
+      const key = (t, f) => { const b = el('button', 'chan-switch small', { type: 'button' }); b.textContent = t; b.addEventListener('click', f); box.append(b); return b; };
+      const name = () => ((B.snapshots || [])[n] || '');
+      const need = () => { if (B.ready) return true; toast('Najpierw połącz się z mikserem.'); return false; };
+      const load = key('wczytaj', () => { if (!need()) return; S.scene = n; bleQueue('scene', 0x20, [n]); setTimeout(() => bleQueue('state', 0x37, []), 400); render(); save(); });
+      key('zapisz', () => {
+        if (!need()) return;
+        if (name() && !confirm('Nadpisać scenę ' + (n + 1) + ' „' + name() + '” obecnymi ustawieniami?')) return;
+        const t = (prompt('Nazwa sceny', name() || 'Scena ' + (n + 1)) || '').trim().slice(0, 20); if (!t) return;
+        bleSnap(0x19, n, t); toast('Zapisano scenę ' + (n + 1));
+      });
+      const ren = key('nazwa', () => { if (!need()) return; const t = (prompt('Nowa nazwa sceny', name()) || '').trim().slice(0, 20); if (t) bleSnap(0x32, n, t); });
+      const del = key('usuń', () => { if (need() && confirm('Usunąć scenę ' + (n + 1) + ' „' + name() + '” z miksera?')) bleSnap(0x12, n); });
+      subRows.push(() => { const t = name(); nm.textContent = t || 'pusta'; nm.classList.toggle('dim', !t); r.classList.toggle('sel', n === S.scene); [load, ren, del].forEach(b => { b.disabled = !t; }); });
+      r.append(num, nm, box); g.append(r);
+    }
+    chanRender();
   }
 
   // ----- EQ editor: response curve, per band frequency / gain / width, low cut -----
@@ -1214,7 +1354,7 @@
   }
   function rename(i) {
     const n = (prompt('Nazwa kanału', S.names[i]) || '').trim().slice(0, 12);
-    if (n) { S.names[i] = n; render(); save(); }
+    if (n) { S.names[i] = n; if (B.ready) bleLabel(i); render(); save(); }
   }
 
   // ---------- Diagnostics ----------
