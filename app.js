@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.30'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.31'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -517,9 +517,9 @@
         const travel = r.height - th, cur = +fader.value;
         const thumbY = r.bottom - th / 2 - cur / 127 * travel;
         drag = { id: e.pointerId, travel, y0: e.clientY, v0: cur };
-        if (Math.abs(e.clientY - thumbY) > th / 2) {   // tap beside the cap: jump there
-          drag.v0 = (r.bottom - th / 2 - e.clientY) / travel * 127; setFader(drag.v0);
-        }
+        // Only the cap moves the fader (FLOW Mix never jumps to the touched spot either):
+        // a finger brushing the track must not change the mix.
+        if (Math.abs(e.clientY - thumbY) > th / 2 + 10 * K) drag = null;
       });
       fader.addEventListener('pointermove', e => {
         if (!drag || e.pointerId !== drag.id) return;
@@ -540,6 +540,8 @@
       faderWrap.append(fader, ticks);
 
       const val = el('div', 's-val');
+      val.addEventListener('click', () => { select(i); askLevel(i); });
+      kl.addEventListener('click', () => { select(i); askGain(i); });
 
       strip.append(head, knobWrap, keys, pan, faderWrap, val);
       strips.appendChild(strip);
@@ -591,6 +593,8 @@
       if (!out) { toast('Najpierw połącz się z mikserem.'); return; }
       sendAll(); toast('Wysłano wszystkie ustawienia do miksera');
     });
+    $('#sel-level').addEventListener('click', () => askLevel(S.sel));
+    $('#sel-gain').addEventListener('click', () => CHANNELS[S.sel].gain ? askGain(S.sel) : askPan(S.sel));
     $('#theme').addEventListener('click', () => { S.theme = S.theme === 'dark' ? 'light' : 'dark'; render(); save(); });
 
     // keep "selected" in sync with the visible page in portrait
@@ -634,6 +638,8 @@
   // pan: drag sideways, double tap = centre
   function bindPan(pan, i) {
     let active = false, startX = 0, startV = 0, lastTap = 0;
+    pan.lastChild.addEventListener('pointerdown', e => { e.stopPropagation(); });
+    pan.lastChild.addEventListener('click', e => { e.stopPropagation(); select(i); askPan(i); });
     pan.addEventListener('pointerdown', e => {
       const t = performance.now();
       if (t - lastTap < 320) { setPan(i, 0); lastTap = 0; return; }
@@ -650,6 +656,67 @@
     pan.addEventListener('keydown', e => {
       const d = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1, PageUp: 10, PageDown: -10 }[e.key];
       if (d) { e.preventDefault(); setPan(i, S.pans[i] + d); } else if (e.key === 'Home') setPan(i, 0);
+    });
+  }
+  // ---------- typing a value by hand ----------
+  function ask(title, value, hint, done) {
+    const old = document.getElementById('ask'); if (old) old.remove();
+    const box = el('form', 'ask', { id: 'ask' });
+    const card = el('div', 'ask-card');
+    const h = el('div', 'ask-title'); h.textContent = title;
+    const row = el('div', 'ask-row');
+    const sign = el('button', 'ask-btn sign', { type: 'button', 'aria-label': 'Zmień znak' }); sign.textContent = '+/−';
+    const inp = el('input', 'ask-input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', enterkeyhint: 'done' });
+    inp.value = value;
+    row.append(sign, inp);
+    const note = el('div', 'ask-hint'); note.textContent = hint;
+    const btns = el('div', 'ask-row');
+    const no = el('button', 'ask-btn', { type: 'button' }); no.textContent = 'Anuluj';
+    const ok = el('button', 'ask-btn go', { type: 'submit' }); ok.textContent = 'OK';
+    btns.append(no, ok);
+    card.append(h, row, note, btns); box.append(card); document.body.append(box);
+    const close = () => box.remove();
+    sign.addEventListener('click', () => {
+      const t = inp.value.trim();
+      inp.value = /^[-−]/.test(t) ? t.slice(1) : '-' + t.replace(/^\+/, ''); inp.focus();
+    });
+    no.addEventListener('click', close);
+    box.addEventListener('pointerdown', e => { if (e.target === box) close(); });
+    box.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+    box.addEventListener('submit', e => { e.preventDefault(); if (done(inp.value.trim()) !== false) close(); else { inp.classList.add('bad'); inp.focus(); } });
+    inp.focus(); inp.select();
+  }
+  const num = t => { const n = parseFloat(t.replace(',', '.').replace('−', '-')); return isFinite(n) ? n : null; };
+  const lawDb = b => { const f = (b + 0.5) / 255; return Math.round(2 * (f >= 0.5 ? 40 * f - 30 : f >= 0.25 ? 80 * f - 50 : f >= 0.0625 ? 160 * f - 70 : 480 * f - 90)) / 2; };
+  function askLevel(i) {
+    const cur = levelDb(S.levels[S.bus][i]);
+    ask('Poziom ' + (CHANNELS[i].master ? BUSES[S.bus].short : S.names[i]) + ' (dB)', cur === '-∞' ? '' : cur.replace('+', ''), 'Od -70 do +10, co 0,5 dB. Puste pole = wyciszony do zera.', t => {
+      let v = 0;
+      if (t !== '' && !/^-?(∞|inf|off)$/i.test(t)) {
+        const d = num(t); if (d === null || d < -200 || d > 10) return false;
+        if (B.ready) {                                     // the mixer step whose display is closest to the typed value
+          let best = 1;
+          for (let b = 1; b <= 255; b++) if (Math.abs(lawDb(b) - d) < Math.abs(lawDb(best) - d)) best = b;
+          v = d < -70 ? 0 : best * 127 / 255;
+        } else v = d < -70 ? 0 : Math.max(1, Math.min(127, Math.round((d + 70) * 126 / 80 + 1)));
+      }
+      S.levels[S.bus][i] = v; refs[i].fader.value = Math.round(v); sendLevel(i); render(); save();
+    });
+  }
+  function askGain(i) {
+    if (!CHANNELS[i].gain) return;
+    ask('Gain ' + S.names[i] + ' (dB)', gainDb(S.gains[i]).replace('+', ''), 'Od -20 do +60, co 0,5 dB.', t => {
+      const d = num(t); if (d === null || d < -20 || d > 60) return false;
+      S.gains[i] = Math.round((d + 20) * 2) * 127 / 160; sendGain(i); render(); save();
+    });
+  }
+  function askPan(i) {
+    if (!panOk(i)) return;
+    ask('Panorama ' + (CHANNELS[i].master ? BUSES[0].short : S.names[i]), panText(S.pans[i]), 'L1 do L50, C, R1 do R50. Sam minus też znaczy lewo.', t => {
+      const m = /^([LR])\s*(\d+)$/i.exec(t);
+      let v = /^c?$/i.test(t) ? 0 : m ? (m[1].toUpperCase() === 'L' ? -1 : 1) * +m[2] : num(t);
+      if (v === null || Math.abs(v) > 50) return false;
+      S.pans[i] = Math.round(v); sendPan(i); render(); save();
     });
   }
   const panText = v => v === 0 ? 'C' : (v < 0 ? 'L' : 'R') + Math.abs(v);
@@ -834,6 +901,7 @@
     $('#bpm-up').addEventListener('click', () => setBpm(M.bpm + 1));
     $('#bpm-slider').addEventListener('input', e => setBpm(+e.target.value));
     $('#bpm-tap').addEventListener('click', tapIn);
+    $('#bpm').addEventListener('click', () => ask('Tempo (bpm)', String(M.bpm), 'Od 40 do 240.', t => { const d = num(t); if (d === null || d < 40 || d > 240) return false; setBpm(d); }));
     $('#meter').addEventListener('click', () => {
       M.beats = M.beats === 4 ? 3 : M.beats === 3 ? 6 : M.beats === 6 ? 2 : 4;
       S.beats = M.beats; save(); metroRender();

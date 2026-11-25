@@ -583,3 +583,18 @@ button:focus-visible, input:focus-visible, .knob:focus-visible {
   .s-knob { row-gap: 4px; }
   .s-name { font-size: 36px; }
 }
+
+/* ---------- typing a value by hand ---------- */
+.ask { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.55); display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 0; }
+.ask-card { box-sizing: border-box; grid-template-columns: minmax(0, 1fr); width: 100%; max-width: 320px; background: var(--panel-1); color: var(--ink); border-radius: 20px; padding: 20px; display: grid; gap: 12px; box-shadow: 0 20px 50px rgba(0,0,0,.5); }
+.ask-title { font-size: 14px; font-weight: 600; color: var(--ink-2); }
+.ask-row { display: flex; gap: 8px; }
+.ask-input { box-sizing: border-box; flex: 1; min-width: 0; width: 0; padding: 0 8px; height: 56px; border: 0; border-radius: 12px; background: var(--screen); color: var(--screen-ink); font-family: Doto, ui-monospace, monospace; font-weight: 700; font-size: 28px; text-align: center; outline: 2px solid transparent; }
+.ask-input:focus { outline-color: var(--accent); }
+.ask-input.bad { outline-color: #E5484D; }
+.ask-hint { font-size: 12px; color: var(--ink-3); line-height: 1.4; }
+.ask-btn { flex: 1; height: 48px; border: 0; border-radius: 12px; background: var(--key); color: var(--ink); font: inherit; font-weight: 600; font-size: 15px; box-shadow: 0 3px 0 var(--key-drop); }
+.ask-btn.sign { flex: 0 0 64px; height: 56px; }
+.ask-btn.go { background: var(--accent); color: #fff; }
+.s-val, .pan-val, .s-knob-label, .metro-bpm { cursor: pointer; }
+.pan-val { pointer-events: auto; }
