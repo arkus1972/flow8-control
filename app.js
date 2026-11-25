@@ -194,7 +194,33 @@
       const faderWrap = el('div', 's-fader');
       const fader = el('input', 'fader', { type: 'range', min: '0', max: '127', step: '1' });
       fader.addEventListener('input', () => { S.levels[S.bus][i] = +fader.value; sendLevel(i); select(i); render(); save(); });
-      fader.addEventListener('pointerdown', () => select(i));
+      // own drag handling: Android Chrome does not drag vertical native ranges reliably
+      const setFader = v => {
+        v = Math.max(0, Math.min(127, Math.round(v)));
+        if (v === S.levels[S.bus][i]) return;
+        fader.value = v; S.levels[S.bus][i] = v; sendLevel(i); render(); save();
+      };
+      let drag = null;
+      fader.addEventListener('pointerdown', e => {
+        e.preventDefault(); select(i); fader.focus({ preventScroll: true });
+        fader.setPointerCapture(e.pointerId);
+        const r = fader.getBoundingClientRect(), th = portrait() ? 56 : 34;
+        const travel = r.height - th, cur = +fader.value;
+        const thumbY = r.bottom - th / 2 - cur / 127 * travel;
+        drag = { id: e.pointerId, travel, y0: e.clientY, v0: cur };
+        if (Math.abs(e.clientY - thumbY) > th / 2) {   // tap beside the cap: jump there
+          drag.v0 = (r.bottom - th / 2 - e.clientY) / travel * 127; setFader(drag.v0);
+        }
+      });
+      fader.addEventListener('pointermove', e => {
+        if (!drag || e.pointerId !== drag.id) return;
+        e.preventDefault();
+        setFader(drag.v0 + (drag.y0 - e.clientY) / drag.travel * 127);
+      });
+      fader.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+      const endDrag = () => { drag = null; };
+      fader.addEventListener('pointerup', endDrag);
+      fader.addEventListener('pointercancel', endDrag);
       const ticks = el('div', 'ticks', { 'aria-hidden': 'true' });
       // tick positions: +10, 0, -10, -30, -50, off (0 dB highlighted)
       [10, 0, -10, -30, -50, -70].forEach(db => {
