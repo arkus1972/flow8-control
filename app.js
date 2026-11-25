@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.5'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.6'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
 
   // ---------- Model ----------
@@ -24,8 +24,8 @@
     { id: 'fx1',  label: 'efekt 1',   short: 'fx 1',  midi: 11, sendCC: 16 },
     { id: 'fx2',  label: 'efekt 2',   short: 'fx 2',  midi: 12, sendCC: 17 }
   ];
-  // one mute icon for every channel: crossed-out ear
-  const MUTE_ICON = 'M9.5 13a6.5 6.5 0 0 1 13 0c0 4.5-4.5 5.2-4.5 9a3.5 3.5 0 0 1-6.5 1.8M13 13.5a3 3 0 0 1 6 0M5 5l20 20';
+  // one mute icon for every channel: crossed-out headphones
+  const MUTE_ICON = 'M5.5 19v-3.5a9.5 9.5 0 0 1 19 0V19M9.5 17v8H8a3 3 0 0 1-3-3v-2a3 3 0 0 1 3-3zM20.5 17v8H22a3 3 0 0 0 3-3v-2a3 3 0 0 0-3-3zM4 4l22 22';
   const CC = { level: 7, mute: 5, solo: 6, gain: 8 };
   const GLOBAL_CH = 16;
   const STORE = 'flow8-control-v1';
