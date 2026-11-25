@@ -1,0 +1,16 @@
+{
+  "name": "flow8-control",
+  "version": "0.11.0",
+  "private": true,
+  "description": "FLOW 8 Control: web app + Android wrapper (Capacitor) with a native Bluetooth bridge",
+  "scripts": {
+    "www": "rm -rf www && mkdir www && cp index.html app.css app.js sw.js manifest.webmanifest icon.svg www/"
+  },
+  "dependencies": {
+    "@capacitor/android": "6.2.3",
+    "@capacitor/core": "6.2.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "6.2.3"
+  }
+}

@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.10'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.11'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
 
   // ---------- Model ----------
@@ -170,7 +170,34 @@
   const toasted = new Set();
   function toastOnce(k, msg) { if (!toasted.has(k)) { toasted.add(k); toast(msg); } }
 
+  // Inside the Android app (Capacitor) a native bridge does the Bluetooth work,
+  // so data from the mixer (its own fader moves, meters) also arrives.
+  const NATIVE = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()
+    ? (window.Capacitor.registerPlugin ? window.Capacitor.registerPlugin('FlowBle') : window.Capacitor.Plugins.FlowBle) : null;
+  async function bleConnectNative() {
+    setConn('busy');
+    try {
+      if (!B.nativeBound) {
+        B.nativeBound = true;
+        await NATIVE.addListener('data', e => bleRx(new Uint8Array(e.value)));
+        await NATIVE.addListener('disconnected', () => bleLost());
+      }
+      await NATIVE.connect();
+      B.dev = { gatt: { get connected() { return !!B.chr; }, disconnect() { NATIVE.disconnect(); bleLost(); } } };
+      B.chr = { writeValueWithResponse: data => NATIVE.write({ data: Array.from(data) }) };
+      B.notify = true; B.heard = false;
+      B.hsTimer = setTimeout(bleHello, 1200);
+      setTimeout(() => {
+        if (B.chr && !B.ready) { B.ready = true; B.oneWay = true; setConn('ble'); render(); toast('Połączono, ale mikser nie odpowiada.'); }
+      }, 3000);
+    } catch (e) {
+      toast('Nie udało się połączyć: ' + ((e && e.message) || e));
+      bleLost();
+    }
+  }
+
   async function bleConnect() {
+    if (NATIVE) return bleConnectNative();
     if (!navigator.bluetooth) {
       toast('Ta przeglądarka nie obsługuje Bluetooth. Użyj Chrome na Androidzie.');
       return;
@@ -479,6 +506,7 @@
     cbtn.addEventListener('click', e => {
       e.stopPropagation();
       if (B.ready) { if (confirmDisconnect()) return; }
+      if (NATIVE) { bleConnect(); return; }               // the Android app talks Bluetooth only
       menu.hidden = !menu.hidden; cbtn.setAttribute('aria-expanded', menu.hidden ? 'false' : 'true');
     });
     $('#conn-ble').addEventListener('click', () => { closeMenu(); bleConnect(); });
@@ -705,7 +733,8 @@
   if (navigator.permissions && navigator.requestMIDIAccess) {
     navigator.permissions.query({ name: 'midi' }).then(p => { if (p.state === 'granted') connect(); }).catch(() => {});
   }
-  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  if (NATIVE) setTimeout(bleConnect, 600);              // the app connects by itself
+  if ('serviceWorker' in navigator && location.protocol === 'https:' && !NATIVE) {
     navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
   }
 })();

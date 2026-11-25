@@ -1,0 +1,6 @@
+{
+  "appId": "com.arkus1972.flow8control",
+  "appName": "FLOW 8 Control",
+  "webDir": "www",
+  "android": { "allowMixedContent": false }
+}
