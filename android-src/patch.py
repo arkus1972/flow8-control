@@ -9,6 +9,9 @@ pkg.mkdir(parents=True, exist_ok=True)
 for f in ('FlowBlePlugin.java', 'MainActivity.java'):
     shutil.copy(root / 'android-src' / f, pkg / f)
 
+# app icon (adaptive + legacy) and splash screen, drawn from icon.svg
+shutil.copytree(root / 'android-src' / 'res', app / 'src' / 'main' / 'res', dirs_exist_ok=True)
+
 man = app / 'src' / 'main' / 'AndroidManifest.xml'
 m = man.read_text()
 perms = '''

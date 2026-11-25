@@ -3,12 +3,9 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.12'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.13'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
-  document.getElementById('ver').addEventListener('click', () => {   // diagnostics: raw meter numbers
-    S.diag = !S.diag; save();
-    document.getElementById('ver').textContent = 'v' + APP_VERSION + (S.diag ? '  diag' : '');
-  });
+  document.getElementById('ver').addEventListener('click', () => diagOpen());
 
   // ---------- Model ----------
   const CHANNELS = [
@@ -125,7 +122,8 @@
   function bleQueue(key, cmd, payload) {
     if (!B.chr) return;
     B.pending.delete(key);
-    B.pending.set(key, frame(cmd, payload));
+    const f = frame(cmd, payload);
+    B.pending.set(key, f);
     bleFlush();
   }
   async function bleFlush() {
@@ -134,6 +132,7 @@
     if (next.done) return;
     const [key, data] = next.value;
     B.pending.delete(key);
+    diagLog('>', data);
     B.busy = true;
     try {
       await (B.chr.writeValueWithResponse ? B.chr.writeValueWithResponse(data) : B.chr.writeValue(data));
@@ -269,6 +268,7 @@
   }
   function bleRx(b) {
     if (b.length < 3) return;
+    diagLog('<', b);
     if (!B.heard) { B.heard = true; if (B.oneWay) { B.oneWay = false; setConn('ble'); toast('Odbiór z miksera działa.'); } }
     if ((b.slice(0, -1).reduce((a, x) => a + x, 0) & 255) !== b[b.length - 1]) return;   // bad checksum
     const cmd = b[0], count = b[1];
@@ -586,6 +586,51 @@
     if (n) { S.names[i] = n; render(); save(); }
   }
 
+  // ---------- Diagnostics ----------
+  // Tap the version label: a log of raw Bluetooth frames, a "probe" button that asks the mixer
+  // for every channel's state, and "copy" so the log can be pasted into the chat.
+  const DIAG = { lines: [], t0: performance.now(), meterSeen: 0 };
+  const hex = b => Array.from(b, x => x.toString(16).padStart(2, '0')).join(' ');
+  function diagLog(dir, b) {
+    if (b[0] === 0x22 && dir === '<' && (DIAG.meterSeen++ % 20)) return;   // keep 1 of 20 meter frames
+    DIAG.lines.push(((performance.now() - DIAG.t0) / 1000).toFixed(2) + ' ' + dir + ' ' + hex(b));
+    if (DIAG.lines.length > 1500) DIAG.lines.splice(0, 300);
+    const ta = document.getElementById('diag-log');
+    if (ta && !ta.closest('[hidden]')) { ta.value = DIAG.lines.slice(-400).join('\n'); ta.scrollTop = ta.scrollHeight; }
+  }
+  function diagOpen() {
+    let d = document.getElementById('diag');
+    if (!d) {
+      d = el('section', 'diag', { id: 'diag', 'aria-label': 'Diagnostyka' });
+      d.innerHTML = '<div class="diag-head"><b>Diagnostyka v' + APP_VERSION + '</b></div>' +
+        '<textarea id="diag-log" readonly></textarea>' +
+        '<div class="diag-keys"><button class="key wide" id="diag-probe" type="button">Badaj mikser</button>' +
+        '<button class="key wide go" id="diag-copy" type="button">Kopiuj</button>' +
+        '<button class="key wide" id="diag-close" type="button">Zamknij</button></div>';
+      document.body.appendChild(d);
+      $('#diag-close').addEventListener('click', () => { d.hidden = true; });
+      $('#diag-probe').addEventListener('click', diagProbe);
+      $('#diag-copy').addEventListener('click', diagCopy);
+    }
+    d.hidden = false;
+    $('#diag-log').value = DIAG.lines.slice(-400).join('\n');
+  }
+  function diagProbe() {
+    if (!B.ready) { toast('Najpierw połącz się z mikserem.'); return; }
+    DIAG.lines.push('--- badanie ---');
+    [0, 1, 2, 3, 4, 5, 6, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f].forEach(id => bleQueue('probe' + id, 0x16, [id]));  // GetChannelState
+    bleQueue('probeLabels', 0x23, []);                                                              // GetChannelLabels
+    bleQueue('probeState', 0x37, []);                                                               // GetMixerState
+    bleQueue('probeSnaps', 0x07, []);
+    toast('Pytam mikser o stan kanałów…');
+  }
+  async function diagCopy() {
+    const levels = 'stan apki: ' + JSON.stringify({ levels: S.levels, gains: S.gains, mutes: S.mutes, solos: S.solos });
+    const text = 'FLOW8 diag v' + APP_VERSION + '\n' + levels + '\n' + DIAG.lines.join('\n');
+    try { await navigator.clipboard.writeText(text); toast('Skopiowano. Wklej to w czacie.'); }
+    catch (e) { const ta = $('#diag-log'); ta.value = text; ta.focus(); ta.select(); toast('Zaznaczyłem tekst: przytrzymaj i wybierz Kopiuj.'); }
+  }
+
   // ---------- Meters ----------
   // Scale not calibrated yet: raw units, METER_FULL = top dot. Tap the version label for raw numbers.
   const METER_FULL = 48;
@@ -599,7 +644,6 @@
         d.className = idx < lit ? (idx >= 10 ? 'on hot' : 'on') : '';
       });
     });
-    if (S.diag) $('#ver').textContent = 'v' + APP_VERSION + '  m:' + B.meters.join(' ');
   }
 
   // ---------- Render ----------
