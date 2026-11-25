@@ -673,3 +673,16 @@ button:focus-visible, input:focus-visible, .knob:focus-visible {
   .ticks span { background: linear-gradient(to right, var(--ink-3) 0 11px, transparent 11px calc(100% - 11px), var(--ink-3) calc(100% - 11px)); opacity: .7; }
   .ticks span.zero { background: linear-gradient(to right, var(--accent) 0 11px, transparent 11px calc(100% - 11px), var(--accent) calc(100% - 11px)); opacity: 1; }
 }
+
+/* Upright view: slim slot, wide cap centred on it, scale lines on both sides */
+@media (orientation: portrait) {
+  .s-fader { position: relative; background: none; box-shadow: none; }
+  .s-fader::before { content: ""; position: absolute; top: 0; bottom: 0; left: calc(50% - 17px); width: 34px; border-radius: 17px; background: var(--tray); box-shadow: inset 0 2px 5px rgba(0, 0, 0, .12); }
+  .s-fader input { position: relative; z-index: 1; }
+  .fader { width: 148px; }
+  .fader::-webkit-slider-thumb { width: 144px; margin-left: -67px; }
+  .fader::-moz-range-thumb { width: 144px; }
+  .ticks { grid-column: 1 / -1; justify-self: stretch; position: absolute; left: 4px; right: 4px; top: calc(var(--u) * 2 + 28px); bottom: calc(var(--u) * 2 + 28px); width: auto; margin: 0; }
+  .ticks span { background: linear-gradient(to right, var(--ink-3) 0 calc(50% - 30px), transparent calc(50% - 30px) calc(50% + 30px), var(--ink-3) calc(50% + 30px)); opacity: .6; }
+  .ticks span.zero { background: linear-gradient(to right, var(--accent) 0 calc(50% - 30px), transparent calc(50% - 30px) calc(50% + 30px), var(--accent) calc(50% + 30px)); opacity: 1; }
+}
