@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.26'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.27'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -513,7 +513,7 @@
       fader.addEventListener('pointerdown', e => {
         e.preventDefault(); select(i); fader.focus({ preventScroll: true });
         fader.setPointerCapture(e.pointerId);
-        const r = fader.getBoundingClientRect(), th = portrait() ? 56 : 34;
+        const r = fader.getBoundingClientRect(), th = portrait() ? 56 : 34 * K;
         const travel = r.height - th, cur = +fader.value;
         const thumbY = r.bottom - th / 2 - cur / 127 * travel;
         drag = { id: e.pointerId, travel, y0: e.clientY, v0: cur };
@@ -641,7 +641,7 @@
     });
     pan.addEventListener('pointermove', e => {
       if (!active) return;
-      const v = startV + (e.clientX - startX) * 100 / Math.max(pan.clientWidth, 140);
+      const v = startV + (e.clientX - startX) / K * 100 / Math.max(pan.clientWidth, 140);
       setPan(i, Math.abs(v) < 3 ? 0 : v);                         // light snap to centre
     });
     const end = () => { active = false; };
@@ -658,6 +658,16 @@
     if (n === S.pans[i] || !panOk(i)) return;
     S.pans[i] = n; sendPan(i); render(); save();
   }
+  // phone held sideways: the layout is designed at 915 x 412 and scaled to the real screen
+  let K = 1;
+  function fit() {
+    const compact = matchMedia('(orientation: landscape) and (max-height: 520px)').matches;
+    const cs = getComputedStyle(document.body), px = v => parseFloat(v) || 0;
+    const w = innerWidth - px(cs.paddingLeft) - px(cs.paddingRight), h = innerHeight - px(cs.paddingTop) - px(cs.paddingBottom);
+    K = compact ? Math.min(1, w / 899, h / 396) : 1;
+    document.documentElement.style.setProperty('--k', K);
+  }
+  addEventListener('resize', fit); fit();
   function setGain(i, v) {
     const n = clamp(v);
     if (n === S.gains[i]) return;
