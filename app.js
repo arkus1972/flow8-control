@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.43'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.44'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -605,9 +605,10 @@
       fader.addEventListener('input', () => { S.levels[S.bus][i] = +fader.value; sendLevel(i); select(i); render(); save(); });
       // own drag handling: Android Chrome does not drag vertical native ranges reliably
       const setFader = v => {
-        v = Math.max(0, Math.min(127, Math.round(v)));
+        // over Bluetooth use the mixer's own 0-255 steps (half as coarse as 0-127), so the dB readout moves in 0.5 dB steps
+        v = Math.max(0, Math.min(127, B.ready ? Math.round(v * 255 / 127) * 127 / 255 : Math.round(v)));
         if (v === S.levels[S.bus][i]) return;
-        fader.value = v; S.levels[S.bus][i] = v; slide(v); sendLevel(i); render(); save();
+        fader.value = Math.round(v); S.levels[S.bus][i] = v; slide(v); sendLevel(i); render(); save();
       };
       let drag = null;
       fader.addEventListener('pointerdown', e => {
@@ -616,7 +617,7 @@
         const r = fader.getBoundingClientRect(), th = (portrait() ? 56 : 34) * K;
         const travel = r.height - th, cur = +fader.value;
         const thumbY = r.bottom - th / 2 - cur / 127 * travel;
-        drag = { id: e.pointerId, travel, y0: e.clientY, v0: cur };
+        drag = { id: e.pointerId, travel, y0: e.clientY, v0: S.levels[S.bus][i] };
         // Only the cap moves the fader (FLOW Mix never jumps to the touched spot either):
         // a finger brushing the track must not change the mix.
         if (Math.abs(e.clientY - thumbY) > th / 2 + 10 * K) drag = null;
