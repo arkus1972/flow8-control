@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.15'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.16'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -321,8 +321,9 @@
       case 0x08: { const i = idx(p[0]); if (i >= 0) { S.mutes[i] = !!p[1]; render(); save(); } break; }
       case 0x01: { const i = idx(p[0]); if (i >= 0) { S.solos[i] = !!p[1]; render(); save(); } break; }
       case 0x38: bleMixerState(p); break;                         // full state (after connect / scene load)
-      case 0x22: {                                                // meters: bytes 2..9 = the 8 strips
-        B.meters = Array.from(p.slice(2, 10)); B.meterAt = now;
+      case 0x22: {                                                // meters: 15 values, same byte→dB law as faders (FLOW Mix)
+        const v = Array.from(p.slice(0, 15)), mx = (a, b) => Math.max(v[a] || 0, v[b] || 0);
+        B.meters = [v[0], v[1], v[2], v[3], mx(4, 5), mx(6, 7), mx(8, 9), mx(10, 11)]; B.meterAt = now;
         renderMeters(); break;
       }
     }
@@ -667,13 +668,15 @@
   }
 
   // ---------- Meters ----------
-  // Scale not calibrated yet: raw units, METER_FULL = top dot. Tap the version label for raw numbers.
-  const METER_FULL = 48;
+  // Same as FLOW Mix: meter byte → dB with the fader law, then dB → 0..100 display scale
+  // (XAIRClient::meterdbValueToLinearScaleValue), 12 dots on our strip.
+  const byteDb = b => { const f = b / 255; return b <= 0 ? -144 : f >= 0.5 ? 40 * f - 30 : f >= 0.25 ? 80 * f - 50 : f >= 0.0625 ? 160 * f - 70 : 480 * f - 90; };
+  const meterScale = x => x < -70 ? 0 : x < -60 ? 0.25 * (x + 70) : x < -50 ? 0.5 * (x + 60) + 2.5 : x < -40 ? 0.75 * (x + 50) + 7.5
+    : x < -30 ? 1.5 * (x + 40) + 15 : x < -20 ? 2 * (x + 30) + 30 : x < 0 ? 2.5 * (x + 20) + 50 : 100;
   const metersLive = () => B.ready && B.meters && performance.now() - B.meterAt < 2000;
   function renderMeters() {
     refs.forEach((r, i) => {
-      const raw = B.meters[i] || 0;
-      const lit = S.mutes[i] ? 0 : Math.min(12, Math.ceil(raw / METER_FULL * 12));
+      const lit = S.mutes[i] ? 0 : Math.round(meterScale(byteDb(B.meters[i] || 0)) / 100 * 12);
       [...r.col.children].forEach((d, k) => {
         const idx = 11 - k;
         d.className = idx < lit ? (idx >= 10 ? 'on hot' : 'on') : '';
