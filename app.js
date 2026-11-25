@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.33'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.34'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -50,6 +50,8 @@
     comp: CHANNELS.map(() => 0),                                // 0..100 %
     p48: CHANNELS.map(() => false),
     phase: CHANNELS.map(() => false),
+    // 9-band EQ of the outputs sala, odsłuch 1, odsłuch 2
+    geq: [0, 1, 2].map(() => ({ g: [0, 0, 0, 0, 0, 0, 0, 0, 0], f: [63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000], q: [8, 8, 8, 8, 8, 8, 8, 8, 8] })),
     fx: [{ preset: 0, v1: 50, v2: 0, v3: 0, en: 0 }, { preset: 0, v1: 50, v2: 0, v3: 0, en: 0 }]   // FX1, FX2 programs
   });
   let S = fresh();
@@ -60,6 +62,7 @@
     const f0 = fresh();
     ['eq', 'eqF', 'eqQ', 'hpf', 'comp', 'p48', 'phase'].forEach(k => { if (!Array.isArray(S[k]) || S[k].length !== CHANNELS.length) S[k] = f0[k]; });
     if (!Array.isArray(S.fx) || S.fx.length !== 2) S.fx = f0.fx;
+    if (!Array.isArray(S.geq) || S.geq.length !== 3) S.geq = f0.geq;
   } catch (e) { /* storage unavailable: run with defaults */ }
   let saveTimer = 0;
   const save = () => {
@@ -179,6 +182,11 @@
     B.touched.set('q' + c.ble + ':' + b, performance.now());
     const f = S.eqF[i][b];
     bleQueue('q' + i + ':' + b, 0x09, [c.ble, b, f >> 8, f & 255, S.eqQ[i][b], eqByte(S.eq[i][b])]);
+  }
+  function bleGeq(bi, b) {                                         // output EQ band: 0x03 [bus][band 0-8][freq u16][q][gain]
+    const o = S.geq[bi], id = BUSES[bi].dst;
+    B.touched.set('e' + id + ':' + b, performance.now());
+    bleQueue('e' + bi + ':' + b, 0x03, [id, b, o.f[b] >> 8, o.f[b] & 255, o.q[b], eqByte(o.g[b])]);
   }
   function bleHpf(i) {
     const c = CHANNELS[i]; if (c.master) return;
@@ -388,6 +396,12 @@
         if (p[2] || p[3]) S.eqF[i][b] = p[2] << 8 | p[3];
         S.eqQ[i][b] = p[4]; S.eq[i][b] = eqDb(p[5]); render(); save(); break;
       }
+      case 0x03: {                                                // output EQ band
+        const bi = BUSES.findIndex(x => x.dst === p[0]), b = p[1];
+        if (bi < 0 || bi > 2 || b > 8 || now - (B.touched.get('e' + p[0] + ':' + b) || 0) < 400) break;
+        const o = S.geq[bi]; if (p[2] || p[3]) o.f[b] = p[2] << 8 | p[3];
+        o.q[b] = p[4]; o.g[b] = eqDb(p[5]); render(); save(); break;
+      }
       case 0x04: {                                                // low cut: [id][on][freq u16]
         const i = idx(p[0]);
         if (i < 0 || now - (B.touched.get('h' + p[0]) || 0) < 400) break;
@@ -439,7 +453,13 @@
         S.fx[id - 0x0c] = { preset: p[k + 7] & 15, v1: Math.min(100, p[k + 4]), v2: p[k + 5] ? 1 : 0, v3: p[k + 6], en: p[k + 1] };
         lv[bi] = Array.from(p.slice(k + 8, k + 15)); k += 17;
       }
-      else { master[bi] = p[k + 2]; if (id === 0x0f) { mainMute = !!(p[k + 1] & 1); mainPan = p[k + 3]; } lv[bi] = Array.from(p.slice(k + 5, k + 12)); k += 52; }
+      else {
+        if (bi < 3) for (let b = 0; b < 9; b++) {                 // +12 nine EQ gains, +21 nine freqs u16, +39 nine Q
+          const f = p[k + 21 + 2 * b] << 8 | p[k + 22 + 2 * b];
+          S.geq[bi].g[b] = eqDb(p[k + 12 + b]); if (f) { S.geq[bi].f[b] = f; S.geq[bi].q[b] = p[k + 39 + b]; }
+        }
+        master[bi] = p[k + 2]; if (id === 0x0f) { mainMute = !!(p[k + 1] & 1); mainPan = p[k + 3]; } lv[bi] = Array.from(p.slice(k + 5, k + 12)); k += 52;
+      }
     }
     const to127 = x => x * 127 / 255;
     CHANNELS.forEach((c, i) => {
@@ -503,6 +523,7 @@
     const led = $('#conn-led'), label = $('#conn-label');
     if (B.ready && state !== 'ble') state = 'ble';
     led.className = 'led' + (state === 'ok' || state === 'ble' ? ' ok' : state === 'demo' || state === 'other' || state === 'busy' ? ' demo' : '');
+    $('#connect').setAttribute('aria-label', 'Połączenie z mikserem');
     label.textContent =
       state === 'ble' ? (B.oneWay ? 'FLOW 8 · Bluetooth (1 strona)' : 'FLOW 8 · Bluetooth') :
       state === 'busy' ? 'Łączę przez Bluetooth…' :
@@ -621,7 +642,7 @@
       const unhold = () => { clearTimeout(hold); hold = 0; };
       faderWrap.addEventListener('pointerdown', e => {
         hx = e.clientX; hy = e.clientY; unhold();
-        hold = setTimeout(() => { hold = 0; drag = null; if (navigator.vibrate) navigator.vibrate(15); openChan(i); }, 550);
+        hold = setTimeout(() => { hold = 0; drag = null; if (navigator.vibrate) navigator.vibrate(15); if (CHANNELS[i].master) { if (S.bus < 3) openEq(eqOutput(S.bus)); } else openChan(i); }, 550);
       });
       faderWrap.addEventListener('pointermove', e => { if (hold && Math.hypot(e.clientX - hx, e.clientY - hy) > 8) unhold(); });
       ['pointerup', 'pointercancel', 'pointerleave'].forEach(t => faderWrap.addEventListener(t, unhold));
@@ -860,7 +881,7 @@
       set: p => { S.eq[i][b] = Math.round((p * 30 - 15) * 2) / 2; bleEq(i, b); },
       text: () => fmt(S.eq[i][b]) + ' dB',
       ask: () => askNum(n + ' ' + hz(S.eqF[i][b]) + ' (dB)', fmt(S.eq[i][b]).replace('+', ''), 'Od -15 do +15, co 0,5 dB.', -15, 15, d => { S.eq[i][b] = Math.round(d * 2) / 2; bleEq(i, b); })
-    })), '<path d="M3 15c3 0 3.5-7 6.5-7s3 9 6 9 2.5-5 5.5-5"/><path d="M3 20h18" opacity=".45"/>', () => openEq(i));
+    })), '<path d="M3 15c3 0 3.5-7 6.5-7s3 9 6 9 2.5-5 5.5-5"/><path d="M3 20h18" opacity=".45"/>', () => openEq(eqInput(i)));
     group('filtr i kompresor', [
       row('odcięcie basu', {
         get: () => Math.log(S.hpf[i] / 20) / Math.log(30),
@@ -898,14 +919,14 @@
   function closeChan() { closeSub(); const p = document.getElementById('chan'); if (p) p.remove(); chanOpen = -1; chanRows = []; }
   function closeSub() { const p = document.getElementById('sub'); if (p) p.remove(); subRows = []; }
   function chanRender() { chanRows.forEach(f => f()); subRows.forEach(f => f()); }
-  function subPage(title, i) {
+  function subPage(title, who) {
     closeSub();
     const page = el('section', 'chan sub', { id: 'sub', 'aria-label': title });
     const head = el('header', 'chan-head');
     const back = el('button', 'chan-back', { type: 'button', 'aria-label': 'Wróć' });
     back.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>';
     back.addEventListener('click', closeSub);
-    const num = el('span', 'chan-num'); num.textContent = S.names[i];
+    const num = el('span', 'chan-num'); num.textContent = typeof who === 'number' ? S.names[who] : who;
     const name = el('span', 'chan-name'); name.textContent = title;
     head.append(back, num, name);
     const body = el('div', 'chan-body');
@@ -933,18 +954,21 @@
     const nr = b0 + b1 * c1 + b2 * c2, ni = -(b1 * s1 + b2 * s2), dr = a0 + a1 * c1 + a2 * c2, di = -(a1 * s1 + a2 * s2);
     return 10 * Math.log10((nr * nr + ni * ni) / (dr * dr + di * di));
   }
-  function eqCurveDb(i, f) {
-    let d = S.hpf[i] > 20 ? biquadDb('hp', S.hpf[i], 0, 0.7, f) : 0;
-    for (let b = 0; b < 4; b++) {
-      if (!S.eq[i][b]) continue;
-      const q = qFrom(S.eqQ[i][b]);
-      d += biquadDb(q > 0 ? 'peak' : b === 0 ? 'low' : b === 3 ? 'high' : 'peak', S.eqF[i][b], S.eq[i][b], q || 0.8, f);
+  function eqCurveDb(T, f) {
+    let d = T.hpf && S.hpf[T.i] > 20 ? biquadDb('hp', S.hpf[T.i], 0, 0.7, f) : 0;
+    for (let b = 0; b < T.g.length; b++) {
+      if (!T.g[b]) continue;
+      const q = qFrom(T.q[b]);
+      d += biquadDb(q > 0 ? 'peak' : b === 0 ? 'low' : b === T.g.length - 1 ? 'high' : 'peak', T.f[b], T.g[b], q || 0.8, f);
     }
     return d;
   }
-  function openEq(i) {
-    const body = subPage('korektor', i);
-    let band = 1;
+  // EQ target: an input channel (4 bands + low cut) or an output (9 bands), same editor for both
+  const eqInput = i => ({ i, hpf: true, title: 'korektor', who: S.names[i], g: S.eq[i], f: S.eqF[i], q: S.eqQ[i], send: b => bleEq(i, b), name: b => EQ_NAMES[b] });
+  const eqOutput = bi => ({ i: -1, hpf: false, title: 'korektor', who: BUSES[bi].label, g: S.geq[bi].g, f: S.geq[bi].f, q: S.geq[bi].q, send: b => bleGeq(bi, b), name: b => hz(S.geq[bi].f[b]) });
+  function openEq(T) {
+    const i = T.i, body = subPage(T.title, T.who);
+    let band = Math.min(1, T.g.length - 1);
     const W = 320, H = 170, fx = f => Math.log(f / F_LO) / Math.log(F_HI / F_LO) * W, gy = g => H / 2 - g / 18 * (H / 2);
     const NS = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(NS, 'svg'); svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('class', 'eq-graph'); svg.setAttribute('preserveAspectRatio', 'none');
@@ -954,68 +978,68 @@
     mk('line', { x1: 0, x2: W, y1: gy(0), y2: gy(0), class: 'eq-zero' });
     const fill = mk('path', { class: 'eq-fill' }), curve = mk('path', { class: 'eq-curve' });
     const wrap = el('div', 'eq-wrap'); wrap.append(svg);
-    const nodes = [0, 1, 2, 3].map(b => {
+    const nodes = T.g.map((x, b) => {
       const n = el('button', 'eq-node', { type: 'button', 'aria-label': 'Pasmo ' + (b + 1) }); n.textContent = b + 1;
       let a = false, x0 = 0, y0 = 0, f0 = 0, g0 = 0;
-      n.addEventListener('pointerdown', e => { band = b; a = true; x0 = e.clientX; y0 = e.clientY; f0 = S.eqF[i][b]; g0 = S.eq[i][b]; n.setPointerCapture(e.pointerId); rebuild(); });
+      n.addEventListener('pointerdown', e => { band = b; a = true; x0 = e.clientX; y0 = e.clientY; f0 = T.f[b]; g0 = T.g[b]; n.setPointerCapture(e.pointerId); rebuild(); });
       n.addEventListener('pointermove', e => {
         if (!a) return;
         const r = wrap.getBoundingClientRect();
-        S.eqF[i][b] = niceHz(f0 * Math.pow(F_HI / F_LO, (e.clientX - x0) / r.width));
-        S.eq[i][b] = Math.max(-15, Math.min(15, Math.round((g0 - (e.clientY - y0) / r.height * 36) * 2) / 2));
-        bleEq(i, b); render(); save();
+        T.f[b] = niceHz(f0 * Math.pow(F_HI / F_LO, (e.clientX - x0) / r.width));
+        T.g[b] = Math.max(-15, Math.min(15, Math.round((g0 - (e.clientY - y0) / r.height * 36) * 2) / 2));
+        T.send(b); render(); save();
       });
       const end = () => { a = false; }; n.addEventListener('pointerup', end); n.addEventListener('pointercancel', end);
       wrap.append(n); return n;
     });
     const chips = el('div', 'eq-chips');
-    const chipEls = [0, 1, 2, 3].map(b => {
+    const chipEls = T.g.map((x, b) => {
       const c = el('button', 'eq-chip', { type: 'button' });
       c.addEventListener('click', () => { band = b; rebuild(); }); chips.append(c); return c;
     });
     const ctl = el('div', 'chan-group');
     const g2 = el('div', 'chan-group');
     const t2 = el('div', 'chan-title'); t2.textContent = 'odcięcie basu'; g2.append(t2);
-    body.append(wrap, chips, ctl, g2);
+    body.append(wrap, chips, ctl); if (T.hpf) body.append(g2);
     const draw = () => {
       let d = '';
-      for (let k = 0; k <= 96; k++) { const f = F_LO * Math.pow(F_HI / F_LO, k / 96); d += (k ? 'L' : 'M') + fx(f).toFixed(1) + ' ' + Math.max(-2, Math.min(H + 2, gy(eqCurveDb(i, f)))).toFixed(1); }
+      for (let k = 0; k <= 96; k++) { const f = F_LO * Math.pow(F_HI / F_LO, k / 96); d += (k ? 'L' : 'M') + fx(f).toFixed(1) + ' ' + Math.max(-2, Math.min(H + 2, gy(eqCurveDb(T, f)))).toFixed(1); }
       curve.setAttribute('d', d); fill.setAttribute('d', d + 'L' + W + ' ' + gy(0) + 'L0 ' + gy(0) + 'Z');
-      nodes.forEach((n, b) => { n.style.left = fx(S.eqF[i][b]) / W * 100 + '%'; n.style.top = gy(S.eq[i][b]) / H * 100 + '%'; n.classList.toggle('on', b === band); });
-      chipEls.forEach((c, b) => { c.innerHTML = '<b>' + (b + 1) + '</b> ' + hz(S.eqF[i][b]) + '<br>' + fmt(S.eq[i][b]) + ' dB'; c.setAttribute('aria-pressed', b === band ? 'true' : 'false'); });
+      nodes.forEach((n, b) => { n.style.left = fx(T.f[b]) / W * 100 + '%'; n.style.top = gy(T.g[b]) / H * 100 + '%'; n.classList.toggle('on', b === band); });
+      chipEls.forEach((c, b) => { c.innerHTML = '<b>' + (b + 1) + '</b> ' + hz(T.f[b]) + '<br>' + fmt(T.g[b]) + ' dB'; c.setAttribute('aria-pressed', b === band ? 'true' : 'false'); });
     };
     const hpfRow = mkRow('częstotliwość', {
       get: () => Math.log(S.hpf[i] / 20) / Math.log(30),
       set: p => { S.hpf[i] = Math.round(20 * Math.pow(30, p)); bleHpf(i); },
       text: () => S.hpf[i] + ' Hz',
       ask: () => askNum('Odcięcie basu (Hz)', String(S.hpf[i]), 'Od 20 do 600 Hz.', 20, 600, d => { S.hpf[i] = Math.round(d); bleHpf(i); })
-    }, subRows);
-    g2.append(hpfRow);
+    }, T.hpf ? subRows : []);
+    if (T.hpf) g2.append(hpfRow);
     function rebuild() {
       subRows = subRows.filter(f => !f.band); ctl.textContent = '';
-      const b = band, t = el('div', 'chan-title'); t.textContent = 'pasmo ' + (b + 1) + ': ' + EQ_NAMES[b]; ctl.append(t);
+      const b = band, t = el('div', 'chan-title'); t.textContent = 'pasmo ' + (b + 1) + ': ' + T.name(b); ctl.append(t);
       const list = [];
       ctl.append(mkRow('częstotliwość', {
-        get: () => Math.log(S.eqF[i][b] / F_LO) / Math.log(F_HI / F_LO),
-        set: p => { S.eqF[i][b] = niceHz(F_LO * Math.pow(F_HI / F_LO, p)); bleEq(i, b); },
-        text: () => hz(S.eqF[i][b]),
-        ask: () => askNum('Częstotliwość pasma ' + (b + 1) + ' (Hz)', String(S.eqF[i][b]), 'Od 20 do 20000 Hz.', 20, 20000, d => { S.eqF[i][b] = Math.round(d); bleEq(i, b); })
+        get: () => Math.log(T.f[b] / F_LO) / Math.log(F_HI / F_LO),
+        set: p => { T.f[b] = niceHz(F_LO * Math.pow(F_HI / F_LO, p)); T.send(b); },
+        text: () => hz(T.f[b]),
+        ask: () => askNum('Częstotliwość pasma ' + (b + 1) + ' (Hz)', String(T.f[b]), 'Od 20 do 20000 Hz.', 20, 20000, d => { T.f[b] = Math.round(d); T.send(b); })
       }, list));
       ctl.append(mkRow('wzmocnienie', {
         mid: true, reset: 0.5,
-        get: () => (S.eq[i][b] + 15) / 30,
-        set: p => { S.eq[i][b] = Math.round((p * 30 - 15) * 2) / 2; bleEq(i, b); },
-        text: () => fmt(S.eq[i][b]) + ' dB',
-        ask: () => askNum('Wzmocnienie pasma ' + (b + 1) + ' (dB)', fmt(S.eq[i][b]).replace('+', ''), 'Od -15 do +15, co 0,5 dB.', -15, 15, d => { S.eq[i][b] = Math.round(d * 2) / 2; bleEq(i, b); })
+        get: () => (T.g[b] + 15) / 30,
+        set: p => { T.g[b] = Math.round((p * 30 - 15) * 2) / 2; T.send(b); },
+        text: () => fmt(T.g[b]) + ' dB',
+        ask: () => askNum('Wzmocnienie pasma ' + (b + 1) + ' (dB)', fmt(T.g[b]).replace('+', ''), 'Od -15 do +15, co 0,5 dB.', -15, 15, d => { T.g[b] = Math.round(d * 2) / 2; T.send(b); })
       }, list));
-      if (S.eqQ[i][b] > 0) ctl.append(mkRow('szerokość (Q)', {       // shelving bands report no Q: left as the mixer has them
-        get: () => Math.log(qFrom(S.eqQ[i][b]) / 0.3) / Math.log(10.3 / 0.3),
-        set: p => { S.eqQ[i][b] = qByte(0.3 * Math.pow(10.3 / 0.3, p)); bleEq(i, b); },
-        text: () => String(qFrom(S.eqQ[i][b]).toFixed(1)).replace('.', ','),
-        ask: () => askNum('Szerokość pasma ' + (b + 1) + ' (Q)', qFrom(S.eqQ[i][b]).toFixed(1).replace('.', ','), 'Od 0,3 (szeroko) do 10,3 (wąsko).', 0.3, 10.3, d => { S.eqQ[i][b] = qByte(d); bleEq(i, b); })
+      if (T.q[b] > 0) ctl.append(mkRow('szerokość (Q)', {       // shelving bands report no Q: left as the mixer has them
+        get: () => Math.log(qFrom(T.q[b]) / 0.3) / Math.log(10.3 / 0.3),
+        set: p => { T.q[b] = qByte(0.3 * Math.pow(10.3 / 0.3, p)); T.send(b); },
+        text: () => String(qFrom(T.q[b]).toFixed(1)).replace('.', ','),
+        ask: () => askNum('Szerokość pasma ' + (b + 1) + ' (Q)', qFrom(T.q[b]).toFixed(1).replace('.', ','), 'Od 0,3 (szeroko) do 10,3 (wąsko).', 0.3, 10.3, d => { T.q[b] = qByte(d); T.send(b); })
       }, list));
       const zero = el('button', 'chan-switch small', { type: 'button' }); zero.textContent = 'wyzeruj korektor';
-      zero.addEventListener('click', () => { for (let k = 0; k < 4; k++) if (S.eq[i][k]) { S.eq[i][k] = 0; bleEq(i, k); } render(); save(); });
+      zero.addEventListener('click', () => { for (let k = 0; k < T.g.length; k++) if (T.g[k]) { T.g[k] = 0; T.send(k); } render(); save(); });
       ctl.append(zero);
       list.forEach(f => { f.band = true; subRows.push(f); });
       chanRender();

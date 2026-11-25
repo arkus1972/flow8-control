@@ -649,3 +649,12 @@ button:focus-visible, input:focus-visible, .knob:focus-visible {
 .fx-preset[aria-pressed="true"] { background: var(--accent); color: #fff; box-shadow: inset 0 2px 5px rgba(0,0,0,.25); }
 .fx-two { display: flex; gap: 6px; }
 .fx-two .chan-switch { flex: 1; }
+
+/* connection status: one small light; tap it for the menu */
+.pill.dot { width: 24px; height: 24px; padding: 0; justify-content: center; flex: none; border-radius: 50%; }
+.pill.dot .led { width: 9px; height: 9px; }
+.conn-status { font-size: 12px; font-weight: 600; color: var(--ink-2); padding: 2px 4px 0; }
+.conn-menu { width: 220px; }
+.eq-chips { grid-template-columns: repeat(auto-fit, minmax(64px, 1fr)); }
+.conn-menu { left: auto; right: 0; }
+@media (orientation: portrait) { .conn-menu { left: -48px; right: auto; width: 200px; } }
