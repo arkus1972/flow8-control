@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.16'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.17'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -60,8 +60,8 @@
     if (v <= 0) return '-∞';
     if (!B.ready) return fmt(-70 + (v - 1) * 80 / 126);
     const f = v / 127;
-    const d = Math.round(f >= 0.5 ? 40 * f - 30 : f >= 0.25 ? 80 * f - 50 : f >= 0.0625 ? 160 * f - 70 : 480 * f - 90);
-    return d < -70 ? '-∞' : (d > 0 ? '+' : d < 0 ? '-' : '') + Math.abs(d);   // whole dB, as the mixer shows
+    const d = Math.trunc(2 * (f >= 0.5 ? 40 * f - 30 : f >= 0.25 ? 80 * f - 50 : f >= 0.0625 ? 160 * f - 70 : 480 * f - 90)) / 2;
+    return d < -70 ? '-∞' : fmt(d);                                // 0.5 dB steps toward 0, as the mixer shows
   };
   const gainDb = v => fmt(-20 + v * 80 / 127);
   function fmt(d) {
