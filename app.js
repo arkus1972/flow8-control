@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.28'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.29'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -661,10 +661,10 @@
   // phone held sideways: the layout is designed at 915 x 412 and scaled to the real screen
   let K = 1;
   function fit() {
-    const compact = matchMedia('(orientation: landscape) and (max-height: 520px)').matches;
+    const compact = matchMedia('(orientation: landscape) and (max-height: 700px)').matches;
     const cs = getComputedStyle(document.body), px = v => parseFloat(v) || 0;
     const w = innerWidth - px(cs.paddingLeft) - px(cs.paddingRight), h = innerHeight - px(cs.paddingTop) - px(cs.paddingBottom);
-    K = compact ? Math.min(1, w / 899, h / 396) : 1;
+    K = compact ? Math.min(2, w / 899, h / 396) : 1;          // small tablets get the same layout, enlarged
     document.documentElement.style.setProperty('--k', K);
   }
   addEventListener('resize', fit); fit();
