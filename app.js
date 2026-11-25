@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.19'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.20'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -136,7 +136,8 @@
     diagLog('>', data);
     B.busy = true;
     try {
-      await (B.chr.writeValueWithResponse ? B.chr.writeValueWithResponse(data) : B.chr.writeValue(data));
+      await Promise.race([B.chr.writeValueWithResponse ? B.chr.writeValueWithResponse(data) : B.chr.writeValue(data),
+        new Promise(r => setTimeout(r, 1500))]);                    // a lost write must not stall the queue
     } catch (e) {
       if (!B.dev || !B.dev.gatt.connected) { bleLost(); return; }
     }
@@ -284,6 +285,9 @@
     }
     bleHandle(cmd, p);
   }
+  // meters for inputs 1-4 (0x40+), 5/6, 7/8, USB (0xC0+ = stereo) and MAIN, as FLOW Mix asks
+  function bleMeterRequest() { bleQueue('meters', 0x21, [8, 0x40, 0x41, 0x42, 0x43, 0xc4, 0xc5, 0xc6, 0xcf, 0, 0, 0, 0, 0, 0, 0]); }
+  setInterval(() => { if (B.ready && performance.now() - (B.meterAt || 0) > 3000) bleMeterRequest(); }, 3000);
   function bleHandle(cmd, p) {
     const idx = id => CHANNELS.findIndex(c => c.ble === id);
     const now = performance.now();
@@ -291,9 +295,8 @@
       case 0x35: bleHello(); break;                               // HandshakeHost
       case 0x36:                                                  // handshake accepted
         bleQueue('state', 0x37, []);                              // GetMixerState
+        bleMeterRequest();
         bleQueue('snaps', 0x07, []);                              // GetSnapshotList
-        // meters for inputs 1-4 (0x40+), 5/6, 7/8, USB (0xC0+ = stereo) and MAIN, as FLOW Mix asks
-        bleQueue('meters', 0x21, [8, 0x40, 0x41, 0x42, 0x43, 0xc4, 0xc5, 0xc6, 0xcf, 0, 0, 0, 0, 0, 0, 0]);
         if (!B.ready) {
           B.ready = true; setConn('ble'); render();
           toast('Połączono przez Bluetooth. Rusz suwakiem na mikserze, a aplikacja go pokaże.');
@@ -324,6 +327,7 @@
       case 0x22: {                                                // meters: 15 values, same byte→dB law as faders (FLOW Mix)
         const v = Array.from(p.slice(0, 15)), mx = (a, b) => Math.max(v[a] || 0, v[b] || 0);
         B.meters = [v[0], v[1], v[2], v[3], mx(4, 5), mx(6, 7), mx(8, 9), mx(10, 11)]; B.meterAt = now;
+        B.meterN = (B.meterN || 0) + 1; B.meterLast = Array.from(p); B.meterMax = Array.from(p).map((x, k) => Math.max(x, (B.meterMax || [])[k] || 0));
         renderMeters(); break;
       }
     }
@@ -662,7 +666,10 @@
   }
   async function diagCopy() {
     const levels = 'stan apki: ' + JSON.stringify({ levels: S.levels, gains: S.gains, mutes: S.mutes, solos: S.solos });
-    const text = 'FLOW8 diag v' + APP_VERSION + '\n' + levels + '\n' + DIAG.lines.join('\n');
+    const hx = a => (a || []).map(x => x.toString(16).padStart(2, '0')).join(' ');
+    const met = 'wskaźniki: ramek ' + (B.meterN || 0) + ', ostatnia ' + hx(B.meterLast) + ', max ' + hx(B.meterMax);
+    B.meterMax = null;                                              // next copy shows the max since this one
+    const text = 'FLOW8 diag v' + APP_VERSION + '\n' + levels + '\n' + met + '\n' + DIAG.lines.join('\n');
     try { await navigator.clipboard.writeText(text); toast('Skopiowano. Wklej to w czacie.'); }
     catch (e) { const ta = $('#diag-log'); ta.value = text; ta.focus(); ta.select(); toast('Zaznaczyłem tekst: przytrzymaj i wybierz Kopiuj.'); }
   }
