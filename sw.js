@@ -1,5 +1,5 @@
 // Offline cache for FLOW 8 Control. Bump VERSION when files change.
-const VERSION = 'flow8-v9';
+const VERSION = 'flow8-v10';
 const FILES = ['./', 'index.html', 'app.css', 'app.js', 'manifest.webmanifest', 'icon.svg'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));

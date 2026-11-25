@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.7'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.8'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
 
   // ---------- Model ----------
@@ -18,11 +18,12 @@
     { name: 'main',     num: 'OUT', midi: 0, gain: false, cap: '#1C1C1C', mark: '#E8501A', glyph: '', master: true }
   ];
   const BUSES = [
-    { id: 'main', label: 'sala',      short: 'sala',  midi: 8,  sendCC: 7 },
-    { id: 'mon1', label: 'odsłuch 1', short: 'mon 1', midi: 9,  sendCC: 14 },
-    { id: 'mon2', label: 'odsłuch 2', short: 'mon 2', midi: 10, sendCC: 15 },
-    { id: 'fx1',  label: 'efekt 1',   short: 'fx 1',  midi: 11, sendCC: 16 },
-    { id: 'fx2',  label: 'efekt 2',   short: 'fx 2',  midi: 12, sendCC: 17 }
+    // dst = bus id on the Bluetooth link (MAIN 0x0f, MON1 0x0a, MON2 0x0b, FX1 0x0c, FX2 0x0d)
+    { id: 'main', label: 'sala',      short: 'sala',  midi: 8,  sendCC: 7,  dst: 0x0f },
+    { id: 'mon1', label: 'odsłuch 1', short: 'mon 1', midi: 9,  sendCC: 14, dst: 0x0a },
+    { id: 'mon2', label: 'odsłuch 2', short: 'mon 2', midi: 10, sendCC: 15, dst: 0x0b },
+    { id: 'fx1',  label: 'efekt 1',   short: 'fx 1',  midi: 11, sendCC: 16, dst: 0x0c },
+    { id: 'fx2',  label: 'efekt 2',   short: 'fx 2',  midi: 12, sendCC: 17, dst: 0x0d }
   ];
   // one mute icon for every channel: headphones, crossed out (and red) when muted
   const MUTE_ICON = '<svg viewBox="0 0 30 30" aria-hidden="true"><path d="M5.5 19v-3.5a9.5 9.5 0 0 1 19 0V19M9.5 17v8H8a3 3 0 0 1-3-3v-2a3 3 0 0 1 3-3zM20.5 17v8H22a3 3 0 0 0 3-3v-2a3 3 0 0 0-3-3z"/><path class="slash" d="M4 4l22 22"/></svg>';
@@ -52,7 +53,14 @@
   };
 
   // ---------- Units ----------
-  const levelDb = v => v <= 0 ? '-∞' : fmt(-70 + (v - 1) * 80 / 126);
+  // USB MIDI: manual's law (-70..+10 dB). Bluetooth: fader position 0-255 with the
+  // Behringer 4-segment law (0 dB at 3/4 travel, matches FLOW Mix: 0 dB ≈ 0xC2).
+  const levelDb = v => {
+    if (v <= 0) return '-∞';
+    if (!B.ready) return fmt(-70 + (v - 1) * 80 / 126);
+    const f = v / 127;
+    return fmt(f >= 0.5 ? 40 * f - 30 : f >= 0.25 ? 80 * f - 50 : f >= 0.0625 ? 160 * f - 70 : 480 * f - 90);
+  };
   const gainDb = v => fmt(-20 + v * 80 / 127);
   function fmt(d) {
     const r = Math.round(d * 10) / 10;
@@ -103,7 +111,6 @@
   // The mixer echoes accepted writes and pushes moves of its own faders (cmd 0x06).
   const BLE_SVC = '14839ad4-8d7e-415c-9a42-167340cf2339';
   const BLE_CHR = '0034594a-a8e7-4b1a-a6b1-cd5243059a57';
-  const DST_MAIN = 0x0f;
   const B = { dev: null, chr: null, ready: false, pending: new Map(), busy: false, frags: new Map(), touched: new Map(), hsTimer: 0 };
   const frame = (cmd, payload) => {
     const b = [cmd, 1, ...payload];
@@ -134,14 +141,12 @@
   }
   const pos255 = v => Math.max(0, Math.min(255, Math.round(v * 255 / 127)));
   const gainByte = g => 0x50 + Math.round(g * 160 / 127);   // 0x50..0xF0 seen in FLOW Mix
-  function bleLevel(i) {
-    const c = CHANNELS[i];
-    if (c.master || S.bus !== 0) {                  // ids for MAIN / monitor / FX buses not known yet
-      toastOnce('ble-bus', 'Przez Bluetooth na razie działają suwaki kanałów w miksie „sala”.');
-      return;
-    }
-    B.touched.set(c.ble, performance.now());
-    bleQueue('l' + i, 0x06, [c.ble, DST_MAIN, pos255(S.levels[0][i])]);
+  function bleLevel(i, bi) {
+    if (bi === undefined) bi = S.bus;
+    const c = CHANNELS[i], dst = BUSES[bi].dst;
+    const ch = c.master ? dst : c.ble;              // a bus master is (bus, bus)
+    B.touched.set(ch, performance.now());
+    bleQueue('l' + bi + ':' + i, 0x06, [ch, dst, pos255(S.levels[bi][i])]);
   }
   function bleGain(i) {
     const c = CHANNELS[i];
@@ -153,10 +158,14 @@
   function bleSolo(i) { const c = CHANNELS[i]; if (!c.master) bleQueue('s' + i, 0x01, [c.ble, S.solos[i] ? 1 : 0]); }
   function bleSendAll() {
     CHANNELS.forEach((c, i) => {
+      BUSES.forEach((b, bi) => bleLevel(i, bi));
       if (c.master) return;
-      if (S.bus === 0) bleLevel(i);
       bleGain(i); bleMute(i); bleSolo(i);
     });
+  }
+  function bleScene(n) {                            // snapshot slot, 0-based on the wire
+    bleQueue('scene', 0x20, [n]);
+    bleQueue('state', 0x37, []);
   }
   const toasted = new Set();
   function toastOnce(k, msg) { if (!toasted.has(k)) { toasted.add(k); toast(msg); } }
@@ -222,17 +231,24 @@
       case 0x35: bleHello(); break;                               // HandshakeHost
       case 0x36:                                                  // handshake accepted
         bleQueue('state', 0x37, []);                              // GetMixerState
+        bleQueue('snaps', 0x07, []);                              // GetSnapshotList
         if (!B.ready) {
-          B.ready = true; setConn('ble');
+          B.ready = true; setConn('ble'); render();
           toast('Połączono przez Bluetooth. Rusz suwakiem na mikserze, a aplikacja go pokaże.');
         }
         break;
       case 0x06: {                                                // fader (echo or moved on the mixer)
-        const i = idx(p[0]);
-        if (i < 0 || p[1] !== DST_MAIN) break;
+        const bi = BUSES.findIndex(b => b.dst === p[1]);
+        const i = p[0] === p[1] ? CHANNELS.findIndex(c => c.master) : idx(p[0]);
+        if (i < 0 || bi < 0) break;
         if (now - (B.touched.get(p[0]) || 0) < 400) break;        // ignore echoes while the user drags
-        S.levels[0][i] = Math.round(p[2] * 127 / 255);
+        S.levels[bi][i] = Math.round(p[2] * 127 / 255);
         render(); save(); break;
+      }
+      case 0x27: {                                                // snapshot list: [len][name]…
+        const names = []; let k = 0;
+        while (k < p.length && p[k]) { names.push(String.fromCharCode(...p.slice(k + 1, k + 1 + p[k]))); k += 1 + p[k]; }
+        B.snapshots = names; break;
       }
       case 0x02: {                                                // gain
         const i = idx(p[0]);
@@ -249,7 +265,7 @@
     const was = B.ready;
     Object.assign(B, { chr: null, ready: false, busy: false });
     B.pending.clear(); B.frags.clear();
-    setConn('idle');
+    setConn('idle'); render();
     if (was) toast('Rozłączono Bluetooth.');
   }
 
@@ -412,7 +428,11 @@
     for (let n = 1; n <= 4; n++) {
       const b = el('button', 'scene', { type: 'button', 'aria-pressed': 'false', 'aria-label': 'Wczytaj scenę ' + n + ' z miksera' });
       b.textContent = n;
-      b.addEventListener('click', () => { S.scene = n - 1; pc(GLOBAL_CH, n); render(); save(); toast('Wczytano scenę ' + n + ' w mikserze'); });
+      b.addEventListener('click', () => {
+        S.scene = n - 1;
+        if (B.ready) bleScene(n - 1); else pc(GLOBAL_CH, n);
+        render(); save(); toast('Wczytano scenę ' + n + ' w mikserze');
+      });
       scenes.appendChild(b);
     }
 
