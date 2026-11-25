@@ -3,8 +3,12 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.11'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.12'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
+  document.getElementById('ver').addEventListener('click', () => {   // diagnostics: raw meter numbers
+    S.diag = !S.diag; save();
+    document.getElementById('ver').textContent = 'v' + APP_VERSION + (S.diag ? '  diag' : '');
+  });
 
   // ---------- Model ----------
   const CHANNELS = [
@@ -287,6 +291,8 @@
       case 0x36:                                                  // handshake accepted
         bleQueue('state', 0x37, []);                              // GetMixerState
         bleQueue('snaps', 0x07, []);                              // GetSnapshotList
+        // meters for inputs 1-4 (0x40+), 5/6, 7/8, USB (0xC0+ = stereo) and MAIN, as FLOW Mix asks
+        bleQueue('meters', 0x21, [8, 0x40, 0x41, 0x42, 0x43, 0xc4, 0xc5, 0xc6, 0xcf, 0, 0, 0, 0, 0, 0, 0]);
         if (!B.ready) {
           B.ready = true; setConn('ble'); render();
           toast('Połączono przez Bluetooth. Rusz suwakiem na mikserze, a aplikacja go pokaże.');
@@ -313,6 +319,10 @@
       }
       case 0x08: { const i = idx(p[0]); if (i >= 0) { S.mutes[i] = !!p[1]; render(); save(); } break; }
       case 0x01: { const i = idx(p[0]); if (i >= 0) { S.solos[i] = !!p[1]; render(); save(); } break; }
+      case 0x22: {                                                // meters: bytes 2..9 = the 8 strips
+        B.meters = Array.from(p.slice(2, 10)); B.meterAt = now;
+        renderMeters(); break;
+      }
     }
   }
   function bleLost() {
@@ -576,6 +586,22 @@
     if (n) { S.names[i] = n; render(); save(); }
   }
 
+  // ---------- Meters ----------
+  // Scale not calibrated yet: raw units, METER_FULL = top dot. Tap the version label for raw numbers.
+  const METER_FULL = 48;
+  const metersLive = () => B.ready && B.meters && performance.now() - B.meterAt < 2000;
+  function renderMeters() {
+    refs.forEach((r, i) => {
+      const raw = B.meters[i] || 0;
+      const lit = S.mutes[i] ? 0 : Math.min(12, Math.ceil(raw / METER_FULL * 12));
+      [...r.col.children].forEach((d, k) => {
+        const idx = 11 - k;
+        d.className = idx < lit ? (idx >= 10 ? 'on hot' : 'on') : '';
+      });
+    });
+    if (S.diag) $('#ver').textContent = 'v' + APP_VERSION + '  m:' + B.meters.join(' ');
+  }
+
   // ---------- Render ----------
   function render() {
     document.documentElement.dataset.theme = S.theme;
@@ -589,9 +615,9 @@
       const v = lv[i];
       const muted = S.mutes[i];
       const sel = i === S.sel;
-      // display column = fader position (the mixer sends no meters back)
+      // display column = live meter from the mixer when we get one, else the fader position
       const lit = muted ? 0 : Math.round(v / 127 * 12);
-      [...r.col.children].forEach((d, k) => {
+      if (!metersLive()) [...r.col.children].forEach((d, k) => {
         const idx = 11 - k; // top dot first
         d.className = idx < lit ? (idx >= 10 ? 'on hot' : 'on') : '';
       });
