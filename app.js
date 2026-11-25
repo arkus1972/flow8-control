@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.13'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.14'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -319,12 +319,43 @@
       }
       case 0x08: { const i = idx(p[0]); if (i >= 0) { S.mutes[i] = !!p[1]; render(); save(); } break; }
       case 0x01: { const i = idx(p[0]); if (i >= 0) { S.solos[i] = !!p[1]; render(); save(); } break; }
+      case 0x38: bleMixerState(p); break;                         // full state (after connect / scene load)
       case 0x22: {                                                // meters: bytes 2..9 = the 8 strips
         B.meters = Array.from(p.slice(2, 10)); B.meterAt = now;
         renderMeters(); break;
       }
     }
   }
+  // MixerState layout (read from Arek's mixer, 2026-11-25):
+  //  7 input records: [id][flags][gain][00 00 14][5 B][8 B][7 B][labelLen][label]
+  //  MAIN 0x0f / MON 0x0a,0x0b (52 B): [id][00][master][7f][3c][7 sends: ch1-4,5/6,7/8,USB][9 GEQ][18 B freqs][9 B][4 B]
+  //  FX 0x0c,0x0d (17 B): [id][00][92][7f][x][3 B][7 sends][2 B]
+  function bleMixerState(p) {
+    let k = 0;
+    const gains = [];
+    for (let ch = 0; ch < 7; ch++) {
+      if (p[k] !== ch || k + 27 > p.length) return;               // layout not as expected: ignore
+      gains[ch] = p[k + 2];
+      k += 27 + p[k + 26];
+    }
+    const lv = BUSES.map(() => null), master = BUSES.map(() => null);
+    while (k < p.length) {
+      const id = p[k], bi = BUSES.findIndex(b => b.dst === id);
+      if (bi < 0) break;
+      if (id === 0x0c || id === 0x0d) { lv[bi] = Array.from(p.slice(k + 8, k + 15)); k += 17; }
+      else { master[bi] = p[k + 2]; lv[bi] = Array.from(p.slice(k + 5, k + 12)); k += 52; }
+    }
+    const to127 = x => Math.round(x * 127 / 255);
+    CHANNELS.forEach((c, i) => {
+      if (c.master) return;
+      if (c.gain) S.gains[i] = Math.max(0, Math.min(127, Math.round((gains[c.ble] - 0x50) * 127 / 160)));
+      BUSES.forEach((b, bi) => { if (lv[bi] && lv[bi].length === 7) S.levels[bi][i] = to127(lv[bi][c.ble]); });
+    });
+    const mi = CHANNELS.findIndex(c => c.master);
+    BUSES.forEach((b, bi) => { if (master[bi] !== null) S.levels[bi][mi] = to127(master[bi]); });
+    render(); save();
+  }
+
   function bleLost() {
     clearTimeout(B.hsTimer);
     const was = B.ready;
