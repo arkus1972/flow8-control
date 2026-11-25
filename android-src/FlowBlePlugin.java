@@ -99,7 +99,6 @@ public class FlowBlePlugin extends Plugin {
                 // FLOW Mix looks for the control service only. The mixer's audio Bluetooth is a
                 // separate device with a similar name, so the name is just a late fallback.
                 boolean byName = name != null && name.toUpperCase().startsWith("FLOW")
-                    && !name.toUpperCase().contains("AUDIO")
                     && d.getType() != BluetoothDevice.DEVICE_TYPE_CLASSIC
                     && System.currentTimeMillis() - scanStart > 6000;
                 if (hasSvc || byName) {
@@ -123,7 +122,7 @@ public class FlowBlePlugin extends Plugin {
     @SuppressLint("MissingPermission")
     private void connectDevice(BluetoothDevice d) {
         attempts++;
-        gatt = d.connectGatt(getContext(), false, cb, BluetoothDevice.TRANSPORT_LE);
+        gatt = d.connectGatt(getContext(), false, cb);   // same call as FLOW Mix: let Android pick the transport
     }
 
     private final BluetoothGattCallback cb = new BluetoothGattCallback() {
