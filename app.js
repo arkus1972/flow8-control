@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.6'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.7'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
 
   // ---------- Model ----------
@@ -24,8 +24,8 @@
     { id: 'fx1',  label: 'efekt 1',   short: 'fx 1',  midi: 11, sendCC: 16 },
     { id: 'fx2',  label: 'efekt 2',   short: 'fx 2',  midi: 12, sendCC: 17 }
   ];
-  // one mute icon for every channel: crossed-out headphones
-  const MUTE_ICON = 'M5.5 19v-3.5a9.5 9.5 0 0 1 19 0V19M9.5 17v8H8a3 3 0 0 1-3-3v-2a3 3 0 0 1 3-3zM20.5 17v8H22a3 3 0 0 0 3-3v-2a3 3 0 0 0-3-3zM4 4l22 22';
+  // one mute icon for every channel: headphones, crossed out (and red) when muted
+  const MUTE_ICON = '<svg viewBox="0 0 30 30" aria-hidden="true"><path d="M5.5 19v-3.5a9.5 9.5 0 0 1 19 0V19M9.5 17v8H8a3 3 0 0 1-3-3v-2a3 3 0 0 1 3-3zM20.5 17v8H22a3 3 0 0 0 3-3v-2a3 3 0 0 0-3-3z"/><path class="slash" d="M4 4l22 22"/></svg>';
   const CC = { level: 7, mute: 5, solo: 6, gain: 8 };
   const GLOBAL_CH = 16;
   const STORE = 'flow8-control-v1';
@@ -340,7 +340,7 @@
 
       const keys = el('div', 's-keys');
       const mute = el('button', 'key mute' + (c.master ? ' none' : ''), { type: 'button', 'aria-pressed': 'false' });
-      mute.innerHTML = c.master ? '' : svgGlyph(MUTE_ICON);
+      mute.innerHTML = c.master ? '' : MUTE_ICON;
       mute.addEventListener('click', () => { S.mutes[i] = !S.mutes[i]; sendMute(i); select(i); render(); save(); });
       const solo = el('button', 'key solo' + (c.master ? ' none' : ''), { type: 'button', 'aria-pressed': 'false' });
       solo.textContent = 'S';

@@ -1,6 +1,7 @@
 /* FLOW 8 Control — design E2 (light + dark). 8 px grid everywhere. */
 :root, [data-theme="light"] {
   --desk: #CFCFCB;
+  --mute: #E0222B;
   --panel-1: #F1F1EE;
   --panel-2: #E3E3DF;
   --edge-hi: #FFFFFF;
@@ -32,6 +33,7 @@
 }
 [data-theme="dark"] {
   --desk: #0F0F10;
+  --mute: #FF3B3B;
   --panel-1: #2B2B2D;
   --panel-2: #1F1F21;
   --edge-hi: #3E3E41;
@@ -236,7 +238,10 @@ button:focus-visible, input:focus-visible, .knob:focus-visible {
   content: ""; position: absolute; top: -12px; left: calc(50% - 3px);
   width: 6px; height: 6px; border-radius: 50%; background: var(--led-off);
 }
-.key.mute[aria-pressed="true"]::before { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.key.mute[aria-pressed="true"]::before { background: var(--mute); box-shadow: 0 0 8px var(--mute); }
+.key.mute .slash { display: none; }
+.key.mute[aria-pressed="true"] .slash { display: inline; }
+.key.mute[aria-pressed="true"] svg { color: var(--mute); }
 .key.solo[aria-pressed="true"]::before { background: #F2C230; box-shadow: 0 0 8px #F2C230; }
 .key.solo { font-size: 13px; }
 .key.none { visibility: hidden; }
