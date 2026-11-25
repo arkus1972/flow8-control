@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.39'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.40'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -704,6 +704,8 @@
     });
     $('#sel-level').addEventListener('click', () => askLevel(S.sel));
     $('#sel-gain').addEventListener('click', () => CHANNELS[S.sel].gain ? askGain(S.sel) : askPan(S.sel));
+    const ck = $('#click-toggle'), ckText = () => { ck.textContent = 'Klik gałek: ' + (S.click === false ? 'wyłączony' : 'włączony'); };
+    ck.addEventListener('click', e => { e.stopPropagation(); S.click = S.click === false; ckText(); save(); notch(); }); ckText();
     $('#view').addEventListener('click', () => setView(VIEWS[(VIEWS.indexOf(S.view || '') + 1) % VIEWS.length]));
     $('#theme').addEventListener('click', () => { S.theme = S.theme === 'dark' ? 'light' : 'dark'; render(); save(); });
 
@@ -739,9 +741,9 @@
     const end = () => { active = false; };
     knob.addEventListener('pointerup', end);
     knob.addEventListener('pointercancel', end);
-    knob.addEventListener('wheel', e => { e.preventDefault(); setGain(i, S.gains[i] - Math.sign(e.deltaY) * 2); }, { passive: false });
+    knob.addEventListener('wheel', e => { e.preventDefault(); setGain(i, S.gains[i] - Math.sign(e.deltaY) * 1.6); }, { passive: false });
     knob.addEventListener('keydown', e => {
-      const d = { ArrowUp: 2, ArrowRight: 2, ArrowDown: -2, ArrowLeft: -2, PageUp: 10, PageDown: -10 }[e.key];
+      const d = { ArrowUp: 1.6, ArrowRight: 1.6, ArrowDown: -1.6, ArrowLeft: -1.6, PageUp: 8, PageDown: -8 }[e.key];
       if (d) { e.preventDefault(); setGain(i, S.gains[i] + d); }
     });
   }
@@ -1147,10 +1149,25 @@
     root.setProperty('--k', K);
   }
   addEventListener('resize', fit); fit();
+  // gain knob turns in 1 dB notches, each with a click and a short buzz like an old encoder
+  let clickCtx = null;
+  function notch() {
+    if (S.click === false) return;
+    try { if (navigator.vibrate) navigator.vibrate(7); } catch (e) {}
+    try {
+      clickCtx = clickCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if (clickCtx.state === 'suspended') clickCtx.resume();
+      const t = clickCtx.currentTime, o = clickCtx.createOscillator(), g = clickCtx.createGain();
+      o.type = 'square'; o.frequency.setValueAtTime(2400, t); o.frequency.exponentialRampToValueAtTime(900, t + 0.012);
+      g.gain.setValueAtTime(0.12, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.018);
+      o.connect(g); g.connect(clickCtx.destination); o.start(t); o.stop(t + 0.02);
+    } catch (e) {}
+  }
   function setGain(i, v) {
-    const n = clamp(v);
-    if (n === S.gains[i]) return;
-    S.gains[i] = n; sendGain(i); render(); save();
+    const db = Math.max(-20, Math.min(60, Math.round(-20 + v * 80 / 127)));
+    const n = (db + 20) * 127 / 80;
+    if (Math.abs(n - S.gains[i]) < 0.01) return;
+    S.gains[i] = n; notch(); sendGain(i); render(); save();
   }
   function select(i, scroll) {
     if (S.sel !== i) { S.sel = i; render(); save(); }
@@ -1236,7 +1253,23 @@
       CHANNELS.forEach((c, i) => {
         const col = el('div', 'big-col'), bar = el('div', 'big-bar'), val = el('div', 'big-val'), name = el('div', 'big-name');
         for (let k = 0; k < SEG; k++) bar.appendChild(el('span'));
-        col.append(bar, val, name); big.append(col); bigCols.push({ bar, val, name, peak: 0, peakAt: 0 });
+        const wrap = el('div', 'big-wrap'), mark = el('span', 'big-mark');
+        wrap.append(bar, mark);
+        const o = { bar, val, name, mark, peak: 0, peakAt: 0, dragAt: 0 };
+        // finger on a column: pull up for louder, down for quieter (relative, so touching never jumps)
+        let a = false, y0 = 0, v0 = 0;
+        col.addEventListener('pointerdown', e => { a = true; y0 = e.clientY; v0 = S.levels[S.bus][i]; col.setPointerCapture(e.pointerId); select(i); o.dragAt = performance.now(); bigRender(); });
+        col.addEventListener('pointermove', e => {
+          if (!a) return;
+          const p = Math.max(0, Math.min(1, v0 / 127 + (y0 - e.clientY) / Math.max(wrap.getBoundingClientRect().height, 60)));
+          const v = B.ready ? Math.round(p * 255) * 127 / 255 : Math.round(p * 127);
+          o.dragAt = performance.now();
+          if (v === S.levels[S.bus][i]) return;
+          S.levels[S.bus][i] = v; refs[i].fader.value = Math.round(v); sendLevel(i); render(); save();
+        });
+        const end = () => { a = false; };
+        col.addEventListener('pointerup', end); col.addEventListener('pointercancel', end);
+        col.append(wrap, val, name); big.append(col); bigCols.push(o);
       });
       strips.after(big);
     }
@@ -1256,7 +1289,10 @@
         const idx = SEG - 1 - k;
         d.className = idx < lit ? (idx >= SEG - 3 ? 'on hot' : idx >= SEG - 8 ? 'on warm' : 'on') : idx === o.peak - 1 && o.peak > 0 ? 'peak' : '';
       });
-      o.val.textContent = S.mutes[i] ? 'mute' : live ? (db < -70 ? '-∞' : fmt(Math.round(db))) .replace(',0', '') : levelDb(S.levels[S.bus][i]).replace(/,\d$/, '');
+      o.mark.style.bottom = S.levels[S.bus][i] / 127 * 100 + '%';
+      const dragging = now - o.dragAt < 1200;
+      o.val.classList.toggle('set', dragging);
+      o.val.textContent = dragging ? levelDb(S.levels[S.bus][i]) : S.mutes[i] ? 'mute' : live ? (db < -70 ? '-∞' : fmt(Math.round(db))) .replace(',0', '') : levelDb(S.levels[S.bus][i]).replace(/,\d$/, '');
       o.name.textContent = c.master ? BUSES[S.bus].short : S.names[i];
       o.name.classList.toggle('sel', i === S.sel);
     });
