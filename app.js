@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.32'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.33'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -49,7 +49,8 @@
     hpf: CHANNELS.map(() => 20),                                // Hz, 20..600
     comp: CHANNELS.map(() => 0),                                // 0..100 %
     p48: CHANNELS.map(() => false),
-    phase: CHANNELS.map(() => false)
+    phase: CHANNELS.map(() => false),
+    fx: [{ preset: 0, v1: 50, v2: 0, v3: 0, en: 0 }, { preset: 0, v1: 50, v2: 0, v3: 0, en: 0 }]   // FX1, FX2 programs
   });
   let S = fresh();
   try {
@@ -58,6 +59,7 @@
     if (!Array.isArray(S.pans) || S.pans.length !== CHANNELS.length) S.pans = CHANNELS.map(() => 0);
     const f0 = fresh();
     ['eq', 'eqF', 'eqQ', 'hpf', 'comp', 'p48', 'phase'].forEach(k => { if (!Array.isArray(S[k]) || S[k].length !== CHANNELS.length) S[k] = f0[k]; });
+    if (!Array.isArray(S.fx) || S.fx.length !== 2) S.fx = f0.fx;
   } catch (e) { /* storage unavailable: run with defaults */ }
   let saveTimer = 0;
   const save = () => {
@@ -187,6 +189,16 @@
     const c = CHANNELS[i]; if (c.master) return;
     B.touched.set('c' + c.ble, performance.now());
     bleQueue('c' + i, 0x13, [c.ble, Math.round(S.comp[i] * 255 / 100)]);
+  }
+  // effect program and its two parameters; the routing bits are sent back exactly as the mixer reported them (as FLOW Mix does)
+  function bleFxSetup(n) {
+    const f = S.fx[n];
+    B.touched.set('x' + n, performance.now());
+    bleQueue('x' + n, 0x11, [0x0c + n, f.v1, f.v2, f.v3, f.en >> 1 & 1, f.en >> 2 & 1, f.en >> 3 & 1]);
+  }
+  function bleFxPreset(n) {
+    bleQueue('xp' + n, 0x31, [0x0c + n, S.fx[n].preset]);
+    setTimeout(() => bleQueue('state', 0x37, []), 400);          // the new program brings its own parameter values
   }
   const bleFlag = (i, cmd, on) => { if (!CHANNELS[i].master) bleQueue('f' + cmd + ':' + i, cmd, [CHANNELS[i].ble, on ? 1 : 0]); };
   function bleGain(i) {
@@ -386,6 +398,12 @@
         if (i < 0 || now - (B.touched.get('c' + p[0]) || 0) < 400) break;
         S.comp[i] = Math.round(p[1] * 100 / 255); render(); save(); break;
       }
+      case 0x11: {                                                // effect parameters
+        const n = p[0] - 0x0c;
+        if (n < 0 || n > 1 || now - (B.touched.get('x' + n) || 0) < 400) break;
+        Object.assign(S.fx[n], { v1: Math.min(100, p[1]), v2: p[2] ? 1 : 0, v3: p[3] }); render(); save(); break;
+      }
+      case 0x31: { const n = p[0] - 0x0c; if (n === 0 || n === 1) { S.fx[n].preset = p[1] & 15; render(); save(); } break; }
       case 0x15: { const i = idx(p[0]); if (i >= 0) { S.p48[i] = !!p[1]; render(); save(); } break; }
       case 0x10: { const i = idx(p[0]); if (i >= 0) { S.phase[i] = !!p[1]; render(); save(); } break; }
       case 0x08: { const i = idx(p[0]); if (i >= 0) { S.mutes[i] = !!p[1]; render(); save(); } break; }
@@ -417,7 +435,10 @@
     while (k < p.length) {
       const id = p[k], bi = BUSES.findIndex(b => b.dst === id);
       if (bi < 0) break;
-      if (id === 0x0c || id === 0x0d) { lv[bi] = Array.from(p.slice(k + 8, k + 15)); k += 17; }
+      if (id === 0x0c || id === 0x0d) {   // [id][flags: bit1 main, bit2 mon1, bit3 mon2][vol][pan][val1][val2][val3][preset][7 sends][2 B]
+        S.fx[id - 0x0c] = { preset: p[k + 7] & 15, v1: Math.min(100, p[k + 4]), v2: p[k + 5] ? 1 : 0, v3: p[k + 6], en: p[k + 1] };
+        lv[bi] = Array.from(p.slice(k + 8, k + 15)); k += 17;
+      }
       else { master[bi] = p[k + 2]; if (id === 0x0f) { mainMute = !!(p[k + 1] & 1); mainPan = p[k + 3]; } lv[bi] = Array.from(p.slice(k + 5, k + 12)); k += 52; }
     }
     const to127 = x => x * 127 / 255;
@@ -779,7 +800,32 @@
 
   // ---------- Channel page: everything about one channel in one place ----------
   // Opened by holding the fader. Levels to every mix (sala, monitors, effects), EQ, low cut, compressor, 48 V, phase.
-  let chanOpen = -1, chanRows = [];
+  let chanOpen = -1, chanRows = [], subRows = [];
+  // one row = label, thin slider (moved by dragging sideways anywhere on it, never jumps), value you can tap to type
+  function mkRow(label, o, list) {
+    const r = el('div', 'chan-row');
+    const l = el('span', 'chan-label'); l.textContent = label;
+    const sl = el('div', 'chan-slider' + (o.mid ? ' mid' : ''), { role: 'slider', tabindex: '0', 'aria-label': label });
+    sl.append(el('span', 'chan-dot'));
+    const v = el('button', 'chan-val', { type: 'button' });
+    v.addEventListener('click', o.ask);
+    let a = false, x0 = 0, p0 = 0, last = 0;
+    sl.addEventListener('pointerdown', e => {
+      const t = performance.now();
+      if (o.reset !== undefined && t - last < 320) { o.set(o.reset); last = 0; render(); save(); return; }
+      last = t; a = true; x0 = e.clientX; p0 = o.get(); sl.setPointerCapture(e.pointerId);
+    });
+    sl.addEventListener('pointermove', e => {
+      if (!a) return;
+      o.set(Math.max(0, Math.min(1, p0 + (e.clientX - x0) / K / Math.max(sl.clientWidth - 16, 80)))); render(); save();
+    });
+    const end = () => { a = false; };
+    sl.addEventListener('pointerup', end); sl.addEventListener('pointercancel', end);
+    r.append(l, sl, v);
+    list.push(() => { sl.style.setProperty('--p', o.get()); sl.classList.toggle('off', o.reset !== undefined && Math.abs(o.get() - o.reset) > 0.001); v.textContent = o.text(); });
+    return r;
+  }
+
   const EQ_NAMES = ['niskie', 'niski środek', 'wysoki środek', 'wysokie'];
   const hz = f => f >= 1000 ? String(f / 1000).replace('.', ',') + ' kHz' : f + ' Hz';
   function openChan(i) {
@@ -794,46 +840,27 @@
     const name = el('span', 'chan-name'); name.textContent = S.names[i];
     head.append(back, num, name);
     const body = el('div', 'chan-body');
-    const group = (title, rows) => {
+    const group = (title, rows, icon, more) => {
       const g = el('div', 'chan-group'); const h = el('div', 'chan-title'); h.textContent = title; g.append(h);
+      if (icon) {
+        const m = el('button', 'chan-more', { type: 'button', 'aria-label': title + ': ustawienia zaawansowane' });
+        m.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">' + icon + '</svg>'; m.addEventListener('click', more); g.append(m);
+      }
       rows.forEach(r => g.append(r)); body.append(g);
     };
-    // one row = label, thin slider (moved by dragging sideways anywhere on it, never jumps), value you can tap to type
-    const row = (label, o) => {
-      const r = el('div', 'chan-row');
-      const l = el('span', 'chan-label'); l.textContent = label;
-      const sl = el('div', 'chan-slider' + (o.mid ? ' mid' : ''), { role: 'slider', tabindex: '0', 'aria-label': label });
-      sl.append(el('span', 'chan-dot'));
-      const v = el('button', 'chan-val', { type: 'button' });
-      v.addEventListener('click', o.ask);
-      let a = false, x0 = 0, p0 = 0, last = 0;
-      sl.addEventListener('pointerdown', e => {
-        const t = performance.now();
-        if (o.reset !== undefined && t - last < 320) { o.set(o.reset); last = 0; render(); save(); return; }
-        last = t; a = true; x0 = e.clientX; p0 = o.get(); sl.setPointerCapture(e.pointerId);
-      });
-      sl.addEventListener('pointermove', e => {
-        if (!a) return;
-        o.set(Math.max(0, Math.min(1, p0 + (e.clientX - x0) / K / Math.max(sl.clientWidth - 16, 80)))); render(); save();
-      });
-      const end = () => { a = false; };
-      sl.addEventListener('pointerup', end); sl.addEventListener('pointercancel', end);
-      r.append(l, sl, v);
-      chanRows.push(() => { sl.style.setProperty('--p', o.get()); sl.classList.toggle('off', o.reset !== undefined && Math.abs(o.get() - o.reset) > 0.001); v.textContent = o.text(); });
-      return r;
-    };
+    const row = (label, o) => mkRow(label, o, chanRows);
     group('poziomy', BUSES.map((b, bi) => row(b.label, {
       get: () => S.levels[bi][i] / 127,
       set: p => { S.levels[bi][i] = B.ready ? Math.round(p * 255) * 127 / 255 : Math.round(p * 127); sendLevelBus(i, bi); },
       text: () => levelDb(S.levels[bi][i]) + ' dB', ask: () => askLevel(i, bi)
-    })));
+    })), '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/>', () => openFx(i));
     group('korektor', EQ_NAMES.map((n, b) => row(n, {
       mid: true, reset: 0.5,
       get: () => (S.eq[i][b] + 15) / 30,
       set: p => { S.eq[i][b] = Math.round((p * 30 - 15) * 2) / 2; bleEq(i, b); },
       text: () => fmt(S.eq[i][b]) + ' dB',
       ask: () => askNum(n + ' ' + hz(S.eqF[i][b]) + ' (dB)', fmt(S.eq[i][b]).replace('+', ''), 'Od -15 do +15, co 0,5 dB.', -15, 15, d => { S.eq[i][b] = Math.round(d * 2) / 2; bleEq(i, b); })
-    })));
+    })), '<path d="M3 15c3 0 3.5-7 6.5-7s3 9 6 9 2.5-5 5.5-5"/><path d="M3 20h18" opacity=".45"/>', () => openEq(i));
     group('filtr i kompresor', [
       row('odcięcie basu', {
         get: () => Math.log(S.hpf[i] / 20) / Math.log(30),
@@ -868,8 +895,193 @@
     $('#device').append(page);
     chanRender();
   }
-  function closeChan() { const p = document.getElementById('chan'); if (p) p.remove(); chanOpen = -1; chanRows = []; }
-  function chanRender() { chanRows.forEach(f => f()); }
+  function closeChan() { closeSub(); const p = document.getElementById('chan'); if (p) p.remove(); chanOpen = -1; chanRows = []; }
+  function closeSub() { const p = document.getElementById('sub'); if (p) p.remove(); subRows = []; }
+  function chanRender() { chanRows.forEach(f => f()); subRows.forEach(f => f()); }
+  function subPage(title, i) {
+    closeSub();
+    const page = el('section', 'chan sub', { id: 'sub', 'aria-label': title });
+    const head = el('header', 'chan-head');
+    const back = el('button', 'chan-back', { type: 'button', 'aria-label': 'Wróć' });
+    back.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>';
+    back.addEventListener('click', closeSub);
+    const num = el('span', 'chan-num'); num.textContent = S.names[i];
+    const name = el('span', 'chan-name'); name.textContent = title;
+    head.append(back, num, name);
+    const body = el('div', 'chan-body');
+    page.append(head, body); $('#device').append(page);
+    return body;
+  }
+
+  // ----- EQ editor: response curve, per band frequency / gain / width, low cut -----
+  const FS = 48000, F_LO = 20, F_HI = 20000;
+  const qFrom = b => b <= 0 ? 0 : b <= 0x65 ? (b - 1) / 10 + 0.3 : b - 0x66 + 11;       // Q byte as FLOW Mix converts it
+  const qByte = q => Math.max(1, Math.min(0x65, Math.round((q - 0.3) * 10) + 1));
+  const niceHz = f => { const m = Math.pow(10, Math.floor(Math.log10(f)) - 1); return Math.max(F_LO, Math.min(F_HI, Math.round(f / m) * m)); };
+  // magnitude in dB of one RBJ biquad at frequency f
+  function biquadDb(type, f0, g, q, f) {
+    const A = Math.pow(10, g / 40), w0 = 2 * Math.PI * f0 / FS, cs = Math.cos(w0), sn = Math.sin(w0);
+    let b0, b1, b2, a0, a1, a2;
+    if (type === 'peak') { const al = sn / (2 * q); b0 = 1 + al * A; b1 = -2 * cs; b2 = 1 - al * A; a0 = 1 + al / A; a1 = -2 * cs; a2 = 1 - al / A; }
+    else if (type === 'hp') { const al = sn / (2 * 0.707); b0 = (1 + cs) / 2; b1 = -(1 + cs); b2 = (1 + cs) / 2; a0 = 1 + al; a1 = -2 * cs; a2 = 1 - al; }
+    else {
+      const al = sn / 2 * Math.SQRT2, sq = 2 * Math.sqrt(A) * al, lo = type === 'low' ? 1 : -1;
+      b0 = A * ((A + 1) - lo * (A - 1) * cs + sq); b1 = lo * 2 * A * ((A - 1) - lo * (A + 1) * cs); b2 = A * ((A + 1) - lo * (A - 1) * cs - sq);
+      a0 = (A + 1) + lo * (A - 1) * cs + sq; a1 = -lo * 2 * ((A - 1) + lo * (A + 1) * cs); a2 = (A + 1) + lo * (A - 1) * cs - sq;
+    }
+    const w = 2 * Math.PI * f / FS, c1 = Math.cos(w), s1 = Math.sin(w), c2 = Math.cos(2 * w), s2 = Math.sin(2 * w);
+    const nr = b0 + b1 * c1 + b2 * c2, ni = -(b1 * s1 + b2 * s2), dr = a0 + a1 * c1 + a2 * c2, di = -(a1 * s1 + a2 * s2);
+    return 10 * Math.log10((nr * nr + ni * ni) / (dr * dr + di * di));
+  }
+  function eqCurveDb(i, f) {
+    let d = S.hpf[i] > 20 ? biquadDb('hp', S.hpf[i], 0, 0.7, f) : 0;
+    for (let b = 0; b < 4; b++) {
+      if (!S.eq[i][b]) continue;
+      const q = qFrom(S.eqQ[i][b]);
+      d += biquadDb(q > 0 ? 'peak' : b === 0 ? 'low' : b === 3 ? 'high' : 'peak', S.eqF[i][b], S.eq[i][b], q || 0.8, f);
+    }
+    return d;
+  }
+  function openEq(i) {
+    const body = subPage('korektor', i);
+    let band = 1;
+    const W = 320, H = 170, fx = f => Math.log(f / F_LO) / Math.log(F_HI / F_LO) * W, gy = g => H / 2 - g / 18 * (H / 2);
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg'); svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('class', 'eq-graph'); svg.setAttribute('preserveAspectRatio', 'none');
+    const mk = (t, a) => { const n = document.createElementNS(NS, t); Object.keys(a).forEach(k => n.setAttribute(k, a[k])); svg.append(n); return n; };
+    [50, 100, 200, 500, 1000, 2000, 5000, 10000].forEach(f => mk('line', { x1: fx(f), x2: fx(f), y1: 0, y2: H, class: 'eq-grid' }));
+    [-12, -6, 6, 12].forEach(g => mk('line', { x1: 0, x2: W, y1: gy(g), y2: gy(g), class: 'eq-grid' }));
+    mk('line', { x1: 0, x2: W, y1: gy(0), y2: gy(0), class: 'eq-zero' });
+    const fill = mk('path', { class: 'eq-fill' }), curve = mk('path', { class: 'eq-curve' });
+    const wrap = el('div', 'eq-wrap'); wrap.append(svg);
+    const nodes = [0, 1, 2, 3].map(b => {
+      const n = el('button', 'eq-node', { type: 'button', 'aria-label': 'Pasmo ' + (b + 1) }); n.textContent = b + 1;
+      let a = false, x0 = 0, y0 = 0, f0 = 0, g0 = 0;
+      n.addEventListener('pointerdown', e => { band = b; a = true; x0 = e.clientX; y0 = e.clientY; f0 = S.eqF[i][b]; g0 = S.eq[i][b]; n.setPointerCapture(e.pointerId); rebuild(); });
+      n.addEventListener('pointermove', e => {
+        if (!a) return;
+        const r = wrap.getBoundingClientRect();
+        S.eqF[i][b] = niceHz(f0 * Math.pow(F_HI / F_LO, (e.clientX - x0) / r.width));
+        S.eq[i][b] = Math.max(-15, Math.min(15, Math.round((g0 - (e.clientY - y0) / r.height * 36) * 2) / 2));
+        bleEq(i, b); render(); save();
+      });
+      const end = () => { a = false; }; n.addEventListener('pointerup', end); n.addEventListener('pointercancel', end);
+      wrap.append(n); return n;
+    });
+    const chips = el('div', 'eq-chips');
+    const chipEls = [0, 1, 2, 3].map(b => {
+      const c = el('button', 'eq-chip', { type: 'button' });
+      c.addEventListener('click', () => { band = b; rebuild(); }); chips.append(c); return c;
+    });
+    const ctl = el('div', 'chan-group');
+    const g2 = el('div', 'chan-group');
+    const t2 = el('div', 'chan-title'); t2.textContent = 'odcięcie basu'; g2.append(t2);
+    body.append(wrap, chips, ctl, g2);
+    const draw = () => {
+      let d = '';
+      for (let k = 0; k <= 96; k++) { const f = F_LO * Math.pow(F_HI / F_LO, k / 96); d += (k ? 'L' : 'M') + fx(f).toFixed(1) + ' ' + Math.max(-2, Math.min(H + 2, gy(eqCurveDb(i, f)))).toFixed(1); }
+      curve.setAttribute('d', d); fill.setAttribute('d', d + 'L' + W + ' ' + gy(0) + 'L0 ' + gy(0) + 'Z');
+      nodes.forEach((n, b) => { n.style.left = fx(S.eqF[i][b]) / W * 100 + '%'; n.style.top = gy(S.eq[i][b]) / H * 100 + '%'; n.classList.toggle('on', b === band); });
+      chipEls.forEach((c, b) => { c.innerHTML = '<b>' + (b + 1) + '</b> ' + hz(S.eqF[i][b]) + '<br>' + fmt(S.eq[i][b]) + ' dB'; c.setAttribute('aria-pressed', b === band ? 'true' : 'false'); });
+    };
+    const hpfRow = mkRow('częstotliwość', {
+      get: () => Math.log(S.hpf[i] / 20) / Math.log(30),
+      set: p => { S.hpf[i] = Math.round(20 * Math.pow(30, p)); bleHpf(i); },
+      text: () => S.hpf[i] + ' Hz',
+      ask: () => askNum('Odcięcie basu (Hz)', String(S.hpf[i]), 'Od 20 do 600 Hz.', 20, 600, d => { S.hpf[i] = Math.round(d); bleHpf(i); })
+    }, subRows);
+    g2.append(hpfRow);
+    function rebuild() {
+      subRows = subRows.filter(f => !f.band); ctl.textContent = '';
+      const b = band, t = el('div', 'chan-title'); t.textContent = 'pasmo ' + (b + 1) + ': ' + EQ_NAMES[b]; ctl.append(t);
+      const list = [];
+      ctl.append(mkRow('częstotliwość', {
+        get: () => Math.log(S.eqF[i][b] / F_LO) / Math.log(F_HI / F_LO),
+        set: p => { S.eqF[i][b] = niceHz(F_LO * Math.pow(F_HI / F_LO, p)); bleEq(i, b); },
+        text: () => hz(S.eqF[i][b]),
+        ask: () => askNum('Częstotliwość pasma ' + (b + 1) + ' (Hz)', String(S.eqF[i][b]), 'Od 20 do 20000 Hz.', 20, 20000, d => { S.eqF[i][b] = Math.round(d); bleEq(i, b); })
+      }, list));
+      ctl.append(mkRow('wzmocnienie', {
+        mid: true, reset: 0.5,
+        get: () => (S.eq[i][b] + 15) / 30,
+        set: p => { S.eq[i][b] = Math.round((p * 30 - 15) * 2) / 2; bleEq(i, b); },
+        text: () => fmt(S.eq[i][b]) + ' dB',
+        ask: () => askNum('Wzmocnienie pasma ' + (b + 1) + ' (dB)', fmt(S.eq[i][b]).replace('+', ''), 'Od -15 do +15, co 0,5 dB.', -15, 15, d => { S.eq[i][b] = Math.round(d * 2) / 2; bleEq(i, b); })
+      }, list));
+      if (S.eqQ[i][b] > 0) ctl.append(mkRow('szerokość (Q)', {       // shelving bands report no Q: left as the mixer has them
+        get: () => Math.log(qFrom(S.eqQ[i][b]) / 0.3) / Math.log(10.3 / 0.3),
+        set: p => { S.eqQ[i][b] = qByte(0.3 * Math.pow(10.3 / 0.3, p)); bleEq(i, b); },
+        text: () => String(qFrom(S.eqQ[i][b]).toFixed(1)).replace('.', ','),
+        ask: () => askNum('Szerokość pasma ' + (b + 1) + ' (Q)', qFrom(S.eqQ[i][b]).toFixed(1).replace('.', ','), 'Od 0,3 (szeroko) do 10,3 (wąsko).', 0.3, 10.3, d => { S.eqQ[i][b] = qByte(d); bleEq(i, b); })
+      }, list));
+      const zero = el('button', 'chan-switch small', { type: 'button' }); zero.textContent = 'wyzeruj korektor';
+      zero.addEventListener('click', () => { for (let k = 0; k < 4; k++) if (S.eq[i][k]) { S.eq[i][k] = 0; bleEq(i, k); } render(); save(); });
+      ctl.append(zero);
+      list.forEach(f => { f.band = true; subRows.push(f); });
+      chanRender();
+    }
+    subRows.push(draw);
+    rebuild();
+  }
+
+  // ----- Effects: program and parameters of FX 1 / FX 2 (names as in the mixer), plus this channel's sends -----
+  const P = (name, par, a, b) => ({ name, par, opt: [a, b] });
+  const MODS = [P('FLANGER', 'mod speed', 'mono', 'stereo'), P('SOFT CHOR', 'density', 'trem off', 'trem on'), P('WARM CHOR', 'density', 'trem off', 'trem on'), P('DEEP CHOR', 'density', 'trem off', 'trem on')];
+  const FX_PRESETS = [
+    [P('AMBIENCE', 'decay', 'instrument', 'vocal'), P('PERC-REV1', 'decay', 'dull', 'bright'), P('PERC-REV2', 'decay', 'dull', 'bright'), P('GUIT-REV1', 'decay', 'less bass', 'more bass'),
+      P('GUIT-REV2', 'decay', 'less bass', 'more bass'), P('CHAMBER', 'decay', 'pre-d off', 'pre-d on'), P('ROOM', 'decay', 'instrument', 'vocal'), P('CONCERT', 'decay', 'instrument', 'vocal'),
+      P('CHURCH', 'decay', 'instrument', 'vocal'), P('CATHEDRAL', 'decay', 'small', 'large'), P('TEMPLE', 'decay', 'pre-d off', 'pre-d on'), P('STADIUM', 'decay', 'pre-d off', 'pre-d on')].concat(MODS),
+    [P('DELAY 1/1', 'feedback', 'dull', 'bright'), P('DELAY 1/2', 'feedback', 'dull', 'bright'), P('DELAY 1/3', 'feedback', 'dull', 'bright'), P('DELAY 2/1', 'feedback', 'dull', 'bright'),
+      P('ECHO 1/1', 'filter', 'soft', 'strong'), P('ECHO 1/2', 'filter', 'soft', 'strong'), P('ECHO 1/3', 'filter', 'soft', 'strong'), P('ECHO 2/1', 'filter', 'soft', 'strong'),
+      P('WIDE ECHO', 'filter', 'wide', 'narrow'), P('PING PONG', 'filter', 'wide', 'narrow'), P('PING P 1/3', 'filter', 'wide', 'narrow'), P('PING P R>L', 'filter', 'wide', 'narrow')].concat(MODS)
+  ];
+  function openFx(i) {
+    const body = subPage('efekty', i);
+    [0, 1].forEach(n => {
+      const bi = 3 + n, g = el('div', 'chan-group');
+      const t = el('div', 'chan-title'); t.textContent = BUSES[bi].label; g.append(t);
+      const grid = el('div', 'fx-grid');
+      const btns = FX_PRESETS[n].map((pr, k) => {
+        const b = el('button', 'fx-preset', { type: 'button' }); b.textContent = pr.name.toLowerCase();
+        b.addEventListener('click', () => { S.fx[n].preset = k; bleFxPreset(n); render(); save(); });
+        grid.append(b); return b;
+      });
+      g.append(grid);
+      const parRow = mkRow('', {
+        get: () => S.fx[n].v1 / 100,
+        set: p => { S.fx[n].v1 = Math.round(p * 100); bleFxSetup(n); },
+        text: () => String(S.fx[n].v1),
+        ask: () => askNum(FX_PRESETS[n][S.fx[n].preset].par + ' (0 do 100)', String(S.fx[n].v1), 'Od 0 do 100.', 0, 100, d => { S.fx[n].v1 = Math.round(d); bleFxSetup(n); })
+      }, subRows);
+      g.append(parRow);
+      const two = el('div', 'fx-two');
+      const opts = [0, 1].map(v => {
+        const b = el('button', 'chan-switch small', { type: 'button' });
+        b.addEventListener('click', () => { S.fx[n].v2 = v; bleFxSetup(n); render(); save(); });
+        two.append(b); return b;
+      });
+      g.append(two);
+      g.append(mkRow('wysyłka kanału', {
+        get: () => S.levels[bi][i] / 127,
+        set: p => { S.levels[bi][i] = B.ready ? Math.round(p * 255) * 127 / 255 : Math.round(p * 127); sendLevelBus(i, bi); },
+        text: () => levelDb(S.levels[bi][i]) + ' dB', ask: () => askLevel(i, bi)
+      }, subRows));
+      const mi = CHANNELS.findIndex(c => c.master);
+      g.append(mkRow('powrót efektu', {
+        get: () => S.levels[bi][mi] / 127,
+        set: p => { S.levels[bi][mi] = B.ready ? Math.round(p * 255) * 127 / 255 : Math.round(p * 127); sendLevelBus(mi, bi); },
+        text: () => levelDb(S.levels[bi][mi]) + ' dB', ask: () => askLevel(mi, bi)
+      }, subRows));
+      subRows.push(() => {
+        const pr = FX_PRESETS[n][S.fx[n].preset] || FX_PRESETS[n][0];
+        btns.forEach((b, k) => b.setAttribute('aria-pressed', k === S.fx[n].preset ? 'true' : 'false'));
+        parRow.firstChild.textContent = pr.par;
+        opts.forEach((b, v) => { b.textContent = pr.opt[v]; b.setAttribute('aria-pressed', S.fx[n].v2 === v ? 'true' : 'false'); });
+      });
+      body.append(g);
+    });
+    chanRender();
+  }
   function askGain(i) {
     if (!CHANNELS[i].gain) return;
     ask('Gain ' + S.names[i] + ' (dB)', gainDb(S.gains[i]).replace('+', ''), 'Od -20 do +60, co 0,5 dB.', t => {
