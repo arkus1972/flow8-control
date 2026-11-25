@@ -598,3 +598,30 @@ button:focus-visible, input:focus-visible, .knob:focus-visible {
 .ask-btn.go { background: var(--accent); color: #fff; }
 .s-val, .pan-val, .s-knob-label, .metro-bpm { cursor: pointer; }
 .pan-val { pointer-events: auto; }
+
+/* ---------- Channel page ---------- */
+.device { position: relative; }
+.chan {
+  position: absolute; inset: 0; z-index: 20; border-radius: inherit; overflow: hidden;
+  background: linear-gradient(180deg, var(--panel-1) 0%, var(--panel-2) 100%);
+  display: grid; grid-template-rows: auto minmax(0, 1fr); padding: calc(var(--u) * 2); gap: var(--u);
+}
+.chan-head { display: flex; align-items: baseline; gap: var(--u); min-width: 0; }
+.chan-back { align-self: center; flex: none; width: 44px; height: 40px; border: 0; border-radius: 12px; background: var(--key); box-shadow: 0 3px 0 var(--key-edge), 0 5px 8px var(--key-drop); display: grid; place-items: center; color: var(--ink); margin-right: var(--u); }
+.chan-back svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.chan-num { font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.chan-name { font-family: Doto, ui-monospace, monospace; font-weight: 900; font-size: 30px; line-height: 1; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chan-body { overflow-y: auto; overscroll-behavior: contain; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--u) calc(var(--u) * 3); align-content: start; padding-bottom: var(--u); }
+.chan-group { background: var(--tray); border-radius: 14px; padding: 10px 12px 6px; }
+.chan-title { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 2px; }
+.chan-row { display: grid; grid-template-columns: 96px minmax(0, 1fr) 84px; align-items: center; height: 40px; }
+.chan-label { font-size: 13px; font-weight: 600; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chan-slider { --p: 0; position: relative; height: 40px; touch-action: pan-y; cursor: ew-resize; outline: none; }
+.chan-slider::before { content: ""; position: absolute; left: 8px; right: 8px; top: 50%; height: 2px; margin-top: -1px; border-radius: 1px; background: var(--ink-3); opacity: .55; }
+.chan-slider.mid::after { content: ""; position: absolute; left: 50%; top: calc(50% - 5px); width: 1px; height: 10px; background: var(--ink-3); }
+.chan-dot { position: absolute; top: 50%; left: calc(8px + (100% - 16px) * var(--p)); width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: var(--key); box-shadow: 0 0 0 1.5px var(--ink-2), 0 2px 3px var(--key-drop); }
+.chan-slider.off .chan-dot { background: var(--accent); box-shadow: 0 0 0 1.5px var(--accent), 0 2px 3px var(--key-drop); }
+.chan-val { border: 0; background: none; padding: 0; height: 40px; text-align: right; font-family: Doto, ui-monospace, monospace; font-weight: 700; font-size: 17px; color: var(--ink); white-space: nowrap; }
+.chan-switches { display: flex; flex-wrap: wrap; gap: var(--u); align-content: start; padding-top: 4px; }
+.chan-switch { height: 44px; padding: 0 16px; border: 0; border-radius: 12px; background: var(--key); color: var(--ink); font: inherit; font-size: 13px; font-weight: 700; box-shadow: 0 3px 0 var(--key-edge), 0 5px 8px var(--key-drop); }
+.chan-switch[aria-pressed="true"] { background: var(--accent); color: #fff; box-shadow: inset 0 3px 6px rgba(0,0,0,.25); transform: translateY(2px); }

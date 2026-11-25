@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.31'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.32'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -41,13 +41,23 @@
     gains: CHANNELS.map(() => 40),
     pans: CHANNELS.map(() => 0),               // -50 (left) .. 0 .. +50 (right)
     mutes: CHANNELS.map(() => false),
-    solos: CHANNELS.map(() => false)
+    solos: CHANNELS.map(() => false),
+    // channel page (FLOW Mix "input" screen): 4-band EQ, low cut, compressor, phantom, phase
+    eq: CHANNELS.map(() => [0, 0, 0, 0]),                       // dB, -15..+15
+    eqF: CHANNELS.map(() => [100, 500, 2000, 12000]),           // Hz, kept as the mixer reports them
+    eqQ: CHANNELS.map(() => [0, 6, 6, 0]),                      // raw Q bytes, sent back unchanged
+    hpf: CHANNELS.map(() => 20),                                // Hz, 20..600
+    comp: CHANNELS.map(() => 0),                                // 0..100 %
+    p48: CHANNELS.map(() => false),
+    phase: CHANNELS.map(() => false)
   });
   let S = fresh();
   try {
     const saved = JSON.parse(localStorage.getItem(STORE) || 'null');
     if (saved && saved.levels && saved.levels.length === BUSES.length) S = Object.assign(S, saved);
     if (!Array.isArray(S.pans) || S.pans.length !== CHANNELS.length) S.pans = CHANNELS.map(() => 0);
+    const f0 = fresh();
+    ['eq', 'eqF', 'eqQ', 'hpf', 'comp', 'p48', 'phase'].forEach(k => { if (!Array.isArray(S[k]) || S[k].length !== CHANNELS.length) S[k] = f0[k]; });
   } catch (e) { /* storage unavailable: run with defaults */ }
   let saveTimer = 0;
   const save = () => {
@@ -65,6 +75,7 @@
     const d = Math.round(2 * (f >= 0.5 ? 40 * f - 30 : f >= 0.25 ? 80 * f - 50 : f >= 0.0625 ? 160 * f - 70 : 480 * f - 90)) / 2;
     return d < -70 ? '-∞' : fmt(d);                                // 0.5 dB steps like the mixer display
   };
+  const eqDb = b => Math.round((b - 127) / 127 * 15 * 2) / 2;     // EQ gain byte to dB in 0.5 dB steps
   const gainDb = v => fmt(-20 + v * 80 / 127);
   function fmt(d) {
     const r = Math.round(d * 10) / 10;
@@ -159,6 +170,25 @@
     B.touched.set(ch, performance.now());
     bleQueue('l' + bi + ':' + i, 0x06, [ch, dst, pos255(S.levels[bi][i])]);
   }
+  // channel page commands, payloads as FLOW Mix builds them (u16 big-endian, EQ gain byte = 127 + dB / 15 * 127)
+  const eqByte = g => Math.max(0, Math.min(254, Math.round(127 + g / 15 * 127)));
+  function bleEq(i, b) {
+    const c = CHANNELS[i]; if (c.master) return;
+    B.touched.set('q' + c.ble + ':' + b, performance.now());
+    const f = S.eqF[i][b];
+    bleQueue('q' + i + ':' + b, 0x09, [c.ble, b, f >> 8, f & 255, S.eqQ[i][b], eqByte(S.eq[i][b])]);
+  }
+  function bleHpf(i) {
+    const c = CHANNELS[i]; if (c.master) return;
+    B.touched.set('h' + c.ble, performance.now());
+    bleQueue('h' + i, 0x04, [c.ble, 1, S.hpf[i] >> 8, S.hpf[i] & 255]);
+  }
+  function bleComp(i) {
+    const c = CHANNELS[i]; if (c.master) return;
+    B.touched.set('c' + c.ble, performance.now());
+    bleQueue('c' + i, 0x13, [c.ble, Math.round(S.comp[i] * 255 / 100)]);
+  }
+  const bleFlag = (i, cmd, on) => { if (!CHANNELS[i].master) bleQueue('f' + cmd + ':' + i, cmd, [CHANNELS[i].ble, on ? 1 : 0]); };
   function bleGain(i) {
     const c = CHANNELS[i];
     if (!c.gain || c.master) return;
@@ -340,6 +370,24 @@
         if (i < 0 || now - (B.touched.get('p' + p[0]) || 0) < 400) break;
         S.pans[i] = panFrom(p[1]); render(); save(); break;
       }
+      case 0x09: {                                                // EQ band: [id][band][freq u16][q][gain]
+        const i = idx(p[0]), b = p[1];
+        if (i < 0 || b > 3 || now - (B.touched.get('q' + p[0] + ':' + b) || 0) < 400) break;
+        if (p[2] || p[3]) S.eqF[i][b] = p[2] << 8 | p[3];
+        S.eqQ[i][b] = p[4]; S.eq[i][b] = eqDb(p[5]); render(); save(); break;
+      }
+      case 0x04: {                                                // low cut: [id][on][freq u16]
+        const i = idx(p[0]);
+        if (i < 0 || now - (B.touched.get('h' + p[0]) || 0) < 400) break;
+        S.hpf[i] = Math.max(20, Math.min(600, p[2] << 8 | p[3])); render(); save(); break;
+      }
+      case 0x13: {                                                // compressor
+        const i = idx(p[0]);
+        if (i < 0 || now - (B.touched.get('c' + p[0]) || 0) < 400) break;
+        S.comp[i] = Math.round(p[1] * 100 / 255); render(); save(); break;
+      }
+      case 0x15: { const i = idx(p[0]); if (i >= 0) { S.p48[i] = !!p[1]; render(); save(); } break; }
+      case 0x10: { const i = idx(p[0]); if (i >= 0) { S.phase[i] = !!p[1]; render(); save(); } break; }
       case 0x08: { const i = idx(p[0]); if (i >= 0) { S.mutes[i] = !!p[1]; render(); save(); } break; }
       case 0x01: { const i = idx(p[0]); if (i >= 0) { S.solos[i] = !!p[1]; render(); save(); } break; }
       case 0x38: bleMixerState(p); break;                         // full state (after connect / scene load)
@@ -358,9 +406,10 @@
   function bleMixerState(p) {
     let k = 0;
     const gains = [];
-    const flags = [], pans = [];
+    const flags = [], pans = [], recs = [];
     for (let ch = 0; ch < 7; ch++) {
       if (p[k] !== ch || k + 27 > p.length) return;               // layout not as expected: ignore
+      recs[ch] = p.slice(k, k + 27);   // +3 squeezer, +4 low cut u16, +7 EQ gains, +11 EQ freqs u16, +19 EQ Q
       gains[ch] = p[k + 2]; flags[ch] = p[k + 1]; pans[ch] = p[k + 6];               // flags: bit0 mute, bit6 solo (as in FLOW Mix)
       k += 27 + p[k + 26];
     }
@@ -376,6 +425,14 @@
       if (c.master) return;
       if (c.gain) S.gains[i] = Math.max(0, Math.min(127, (gains[c.ble] - 0x50) * 127 / 160));
       S.mutes[i] = !!(flags[c.ble] & 1); S.solos[i] = !!(flags[c.ble] & 0x40); S.pans[i] = panFrom(pans[c.ble]);
+      const r = recs[c.ble];
+      S.phase[i] = !!(flags[c.ble] & 4); S.p48[i] = !!(flags[c.ble] & 8);
+      S.comp[i] = Math.round(r[3] * 100 / 255); S.hpf[i] = Math.max(20, Math.min(600, r[4] << 8 | r[5]));
+      for (let b = 0; b < 4; b++) {
+        S.eq[i][b] = eqDb(r[7 + b]);
+        const f = r[11 + 2 * b] << 8 | r[12 + 2 * b];
+        if (f) { S.eqF[i][b] = f; S.eqQ[i][b] = r[19 + b]; }
+      }
       BUSES.forEach((b, bi) => { if (lv[bi] && lv[bi].length === 7) S.levels[bi][i] = to127(lv[bi][c.ble]); });
     });
     const mi = CHANNELS.findIndex(c => c.master);
@@ -538,6 +595,15 @@
         ticks.appendChild(t);
       });
       faderWrap.append(fader, ticks);
+      // holding the fader still opens the channel page
+      let hold = 0, hx = 0, hy = 0;
+      const unhold = () => { clearTimeout(hold); hold = 0; };
+      faderWrap.addEventListener('pointerdown', e => {
+        hx = e.clientX; hy = e.clientY; unhold();
+        hold = setTimeout(() => { hold = 0; drag = null; if (navigator.vibrate) navigator.vibrate(15); openChan(i); }, 550);
+      });
+      faderWrap.addEventListener('pointermove', e => { if (hold && Math.hypot(e.clientX - hx, e.clientY - hy) > 8) unhold(); });
+      ['pointerup', 'pointercancel', 'pointerleave'].forEach(t => faderWrap.addEventListener(t, unhold));
 
       const val = el('div', 's-val');
       val.addEventListener('click', () => { select(i); askLevel(i); });
@@ -688,9 +754,15 @@
   }
   const num = t => { const n = parseFloat(t.replace(',', '.').replace('−', '-')); return isFinite(n) ? n : null; };
   const lawDb = b => { const f = (b + 0.5) / 255; return Math.round(2 * (f >= 0.5 ? 40 * f - 30 : f >= 0.25 ? 80 * f - 50 : f >= 0.0625 ? 160 * f - 70 : 480 * f - 90)) / 2; };
-  function askLevel(i) {
-    const cur = levelDb(S.levels[S.bus][i]);
-    ask('Poziom ' + (CHANNELS[i].master ? BUSES[S.bus].short : S.names[i]) + ' (dB)', cur === '-∞' ? '' : cur.replace('+', ''), 'Od -70 do +10, co 0,5 dB. Puste pole = wyciszony do zera.', t => {
+  function sendLevelBus(i, bi) {
+    if (bi === S.bus) return sendLevel(i);
+    if (B.ready) return bleLevel(i, bi);
+    if (!CHANNELS[i].master) cc(CHANNELS[i].midi, BUSES[bi].sendCC, Math.round(S.levels[bi][i]));
+  }
+  function askLevel(i, bi) {
+    if (bi === undefined) bi = S.bus;
+    const cur = levelDb(S.levels[bi][i]);
+    ask((bi === S.bus ? 'Poziom ' : BUSES[bi].short + ': ') + (CHANNELS[i].master ? BUSES[bi].short : S.names[i]) + ' (dB)', cur === '-∞' ? '' : cur.replace('+', ''), 'Od -70 do +10, co 0,5 dB. Puste pole = wyciszony do zera.', t => {
       let v = 0;
       if (t !== '' && !/^-?(∞|inf|off)$/i.test(t)) {
         const d = num(t); if (d === null || d < -200 || d > 10) return false;
@@ -700,9 +772,104 @@
           v = d < -70 ? 0 : best * 127 / 255;
         } else v = d < -70 ? 0 : Math.max(1, Math.min(127, Math.round((d + 70) * 126 / 80 + 1)));
       }
-      S.levels[S.bus][i] = v; refs[i].fader.value = Math.round(v); sendLevel(i); render(); save();
+      S.levels[bi][i] = v; if (bi === S.bus) refs[i].fader.value = Math.round(v); sendLevelBus(i, bi); render(); save();
     });
   }
+  const askNum = (title, cur, hint, lo, hi, set) => ask(title, cur, hint, t => { const d = num(t); if (d === null || d < lo || d > hi) return false; set(d); render(); save(); });
+
+  // ---------- Channel page: everything about one channel in one place ----------
+  // Opened by holding the fader. Levels to every mix (sala, monitors, effects), EQ, low cut, compressor, 48 V, phase.
+  let chanOpen = -1, chanRows = [];
+  const EQ_NAMES = ['niskie', 'niski środek', 'wysoki środek', 'wysokie'];
+  const hz = f => f >= 1000 ? String(f / 1000).replace('.', ',') + ' kHz' : f + ' Hz';
+  function openChan(i) {
+    if (CHANNELS[i].master) return;
+    closeChan(); chanOpen = i; chanRows = [];
+    const page = el('section', 'chan', { id: 'chan', 'aria-label': 'Ustawienia kanału' });
+    const head = el('header', 'chan-head');
+    const back = el('button', 'chan-back', { type: 'button', 'aria-label': 'Wróć' });
+    back.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>';
+    back.addEventListener('click', closeChan);
+    const num = el('span', 'chan-num'); num.textContent = CHANNELS[i].num;
+    const name = el('span', 'chan-name'); name.textContent = S.names[i];
+    head.append(back, num, name);
+    const body = el('div', 'chan-body');
+    const group = (title, rows) => {
+      const g = el('div', 'chan-group'); const h = el('div', 'chan-title'); h.textContent = title; g.append(h);
+      rows.forEach(r => g.append(r)); body.append(g);
+    };
+    // one row = label, thin slider (moved by dragging sideways anywhere on it, never jumps), value you can tap to type
+    const row = (label, o) => {
+      const r = el('div', 'chan-row');
+      const l = el('span', 'chan-label'); l.textContent = label;
+      const sl = el('div', 'chan-slider' + (o.mid ? ' mid' : ''), { role: 'slider', tabindex: '0', 'aria-label': label });
+      sl.append(el('span', 'chan-dot'));
+      const v = el('button', 'chan-val', { type: 'button' });
+      v.addEventListener('click', o.ask);
+      let a = false, x0 = 0, p0 = 0, last = 0;
+      sl.addEventListener('pointerdown', e => {
+        const t = performance.now();
+        if (o.reset !== undefined && t - last < 320) { o.set(o.reset); last = 0; render(); save(); return; }
+        last = t; a = true; x0 = e.clientX; p0 = o.get(); sl.setPointerCapture(e.pointerId);
+      });
+      sl.addEventListener('pointermove', e => {
+        if (!a) return;
+        o.set(Math.max(0, Math.min(1, p0 + (e.clientX - x0) / K / Math.max(sl.clientWidth - 16, 80)))); render(); save();
+      });
+      const end = () => { a = false; };
+      sl.addEventListener('pointerup', end); sl.addEventListener('pointercancel', end);
+      r.append(l, sl, v);
+      chanRows.push(() => { sl.style.setProperty('--p', o.get()); sl.classList.toggle('off', o.reset !== undefined && Math.abs(o.get() - o.reset) > 0.001); v.textContent = o.text(); });
+      return r;
+    };
+    group('poziomy', BUSES.map((b, bi) => row(b.label, {
+      get: () => S.levels[bi][i] / 127,
+      set: p => { S.levels[bi][i] = B.ready ? Math.round(p * 255) * 127 / 255 : Math.round(p * 127); sendLevelBus(i, bi); },
+      text: () => levelDb(S.levels[bi][i]) + ' dB', ask: () => askLevel(i, bi)
+    })));
+    group('korektor', EQ_NAMES.map((n, b) => row(n, {
+      mid: true, reset: 0.5,
+      get: () => (S.eq[i][b] + 15) / 30,
+      set: p => { S.eq[i][b] = Math.round((p * 30 - 15) * 2) / 2; bleEq(i, b); },
+      text: () => fmt(S.eq[i][b]) + ' dB',
+      ask: () => askNum(n + ' ' + hz(S.eqF[i][b]) + ' (dB)', fmt(S.eq[i][b]).replace('+', ''), 'Od -15 do +15, co 0,5 dB.', -15, 15, d => { S.eq[i][b] = Math.round(d * 2) / 2; bleEq(i, b); })
+    })));
+    group('filtr i kompresor', [
+      row('odcięcie basu', {
+        get: () => Math.log(S.hpf[i] / 20) / Math.log(30),
+        set: p => { S.hpf[i] = Math.round(20 * Math.pow(30, p)); bleHpf(i); },
+        text: () => S.hpf[i] + ' Hz',
+        ask: () => askNum('Odcięcie basu (Hz)', String(S.hpf[i]), 'Od 20 do 600 Hz.', 20, 600, d => { S.hpf[i] = Math.round(d); bleHpf(i); })
+      }),
+      row('kompresor', {
+        get: () => S.comp[i] / 100,
+        set: p => { S.comp[i] = Math.round(p * 100); bleComp(i); },
+        text: () => S.comp[i] + ' %',
+        ask: () => askNum('Kompresor (%)', String(S.comp[i]), 'Od 0 do 100.', 0, 100, d => { S.comp[i] = Math.round(d); bleComp(i); })
+      })
+    ]);
+    const sw = el('div', 'chan-switches');
+    const toggle = (label, key, cmd, warn) => {
+      const b = el('button', 'chan-switch', { type: 'button', 'aria-pressed': 'false' }); b.textContent = label;
+      b.addEventListener('click', () => {
+        if (!S[key][i] && warn && !confirm(warn)) return;
+        S[key][i] = !S[key][i]; bleFlag(i, cmd, S[key][i]); render(); save();
+      });
+      chanRows.push(() => b.setAttribute('aria-pressed', S[key][i] ? 'true' : 'false'));
+      sw.append(b);
+    };
+    if (CHANNELS[i].ble < 2) toggle('48 V', 'p48', 0x15, 'Włączyć zasilanie phantom 48 V na kanale ' + CHANNELS[i].num + '? Ścisz najpierw kanał.');
+    if (CHANNELS[i].ble < 4) toggle('odwróć fazę', 'phase', 0x10);
+    const ren = el('button', 'chan-switch', { type: 'button' }); ren.textContent = 'zmień nazwę';
+    ren.addEventListener('click', () => { rename(i); name.textContent = S.names[i]; });
+    sw.append(ren);
+    body.append(sw);
+    page.append(head, body);
+    $('#device').append(page);
+    chanRender();
+  }
+  function closeChan() { const p = document.getElementById('chan'); if (p) p.remove(); chanOpen = -1; chanRows = []; }
+  function chanRender() { chanRows.forEach(f => f()); }
   function askGain(i) {
     if (!CHANNELS[i].gain) return;
     ask('Gain ' + S.names[i] + ' (dB)', gainDb(S.gains[i]).replace('+', ''), 'Od -20 do +60, co 0,5 dB.', t => {
@@ -876,6 +1043,7 @@
     $('#sel-name').textContent = sc.master ? bus.label : S.names[S.sel];
     $('#sel-name').classList.toggle('muted', !!S.mutes[S.sel]);
     $('#sel-level').textContent = (sc.master ? 'poziom ' : (S.bus === 0 ? 'poziom ' : 'wysyłka ')) + levelDb(lv[S.sel]) + ' dB';
+    chanRender();
     $('#sel-gain').textContent = (sc.gain ? 'gain ' + gainDb(S.gains[S.sel]) + ' dB  ' : '') + (panOk(S.sel) ? 'pan ' + panText(S.pans[S.sel]) : '');
     $('#bus-label').textContent = 'miks: ' + bus.label;
 
