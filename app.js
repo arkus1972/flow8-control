@@ -3,6 +3,8 @@
  * so the app keeps its own state (saved on the device) and can resend everything with "sync". */
 (() => {
   'use strict';
+  const APP_VERSION = '0.3'; // bump on every release (shown on the display)
+  document.getElementById('ver').textContent = 'v' + APP_VERSION;
 
   // ---------- Model ----------
   const CHANNELS = [

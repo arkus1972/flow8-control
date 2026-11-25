@@ -95,6 +95,12 @@ button:focus-visible, input:focus-visible, .knob:focus-visible {
   gap: calc(var(--u) * 3);
   padding: calc(var(--u) * 2) calc(var(--u) * 3);
   color: var(--screen-ink);
+  position: relative;
+}
+.ver {
+  position: absolute; right: 8px; bottom: 4px;
+  font-family: Doto, ui-monospace, monospace; font-weight: 700; font-size: 11px; line-height: 1;
+  color: var(--screen-dim); pointer-events: none;
 }
 .dots {
   display: grid;
