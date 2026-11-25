@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.37'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.38'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -28,6 +28,7 @@
   ];
   // one mute icon for every channel: headphones, crossed out (and red) when muted
   const MUTE_ICON = '<svg viewBox="0 0 30 30" aria-hidden="true"><path d="M5.5 19v-3.5a9.5 9.5 0 0 1 19 0V19M9.5 17v8H8a3 3 0 0 1-3-3v-2a3 3 0 0 1 3-3zM20.5 17v8H22a3 3 0 0 0 3-3v-2a3 3 0 0 0-3-3z"/><path class="slash" d="M4 4l22 22"/></svg>';
+  const ROWS = 15;   // dots per meter column on the display
   const CC = { level: 7, mute: 5, solo: 6, gain: 8 };
   const GLOBAL_CH = 16;
   const STORE = 'flow8-control-v1';
@@ -557,7 +558,7 @@
     CHANNELS.forEach((c, i) => {
       // display column
       const col = el('button', 'dot-col', { type: 'button', role: 'tab', 'aria-label': 'Pokaż kanał ' + S.names[i] });
-      for (let k = 0; k < 12; k++) col.appendChild(el('span'));
+      for (let k = 0; k < ROWS; k++) col.appendChild(el('span'));
       col.addEventListener('click', () => select(i, true));
       dots.appendChild(col);
 
@@ -612,7 +613,7 @@
       fader.addEventListener('pointerdown', e => {
         e.preventDefault(); select(i); fader.focus({ preventScroll: true });
         fader.setPointerCapture(e.pointerId);
-        const r = fader.getBoundingClientRect(), th = (portrait() ? 56 : 34) * K;
+        const r = fader.getBoundingClientRect(), th = (portrait() && S.view !== 'faders' ? 56 : 34) * K;
         const travel = r.height - th, cur = +fader.value;
         const thumbY = r.bottom - th / 2 - cur / 127 * travel;
         drag = { id: e.pointerId, travel, y0: e.clientY, v0: cur };
@@ -703,12 +704,13 @@
     });
     $('#sel-level').addEventListener('click', () => askLevel(S.sel));
     $('#sel-gain').addEventListener('click', () => CHANNELS[S.sel].gain ? askGain(S.sel) : askPan(S.sel));
+    $('#view').addEventListener('click', () => setView(VIEWS[(VIEWS.indexOf(S.view || '') + 1) % VIEWS.length]));
     $('#theme').addEventListener('click', () => { S.theme = S.theme === 'dark' ? 'light' : 'dark'; render(); save(); });
 
     // keep "selected" in sync with the visible page in portrait
     let scrollTimer = 0;
     strips.addEventListener('scroll', () => {
-      if (!portrait()) return;
+      if (!portrait() || S.view) return;
       clearTimeout(scrollTimer);
       scrollTimer = setTimeout(() => {
         const i = Math.round(strips.scrollLeft / strips.clientWidth);
@@ -1155,7 +1157,7 @@
     if (scroll) scrollToSel(true);
   }
   function scrollToSel(smooth) {
-    if (!portrait()) return;
+    if (!portrait() || S.view === 'faders') return;
     const strips = $('#strips');
     strips.scrollTo({ left: S.sel * strips.clientWidth, behavior: smooth ? 'smooth' : 'auto' });
   }
@@ -1219,12 +1221,53 @@
   const meterScale = x => x < -70 ? 0 : x < -60 ? 0.25 * (x + 70) : x < -50 ? 0.5 * (x + 60) + 2.5 : x < -40 ? 0.75 * (x + 50) + 7.5
     : x < -30 ? 1.5 * (x + 40) + 15 : x < -20 ? 2 * (x + 30) + 30 : x < 0 ? 2.5 * (x + 20) + 50 : 100;
   const metersLive = () => B.ready && B.meters && performance.now() - B.meterAt < 2000;
+  // ----- full-screen views: 'faders' = only the volume faders of every channel, 'meters' = only tall level meters -----
+  const SEG = 30, VIEWS = ['', 'faders', 'meters'], VIEW_NAMES = { '': 'Widok pełny', faders: 'Widok: same suwaki', meters: 'Widok: same wskaźniki' };
+  let big = null, bigCols = [];
+  function setView(v, quiet) {
+    S.view = VIEWS.includes(v) ? v : '';
+    const root = document.documentElement;
+    root.classList.toggle('v-faders', S.view === 'faders'); root.classList.toggle('v-meters', S.view === 'meters');
+    closeChan();
+    const strips = $('#strips');
+    if (S.view === 'faders') strips.scrollLeft = 0; else setTimeout(() => scrollToSel(false), 0);
+    if (S.view === 'meters' && !big) {
+      big = el('section', 'big', { id: 'big', 'aria-label': 'Wskaźniki poziomu' });
+      CHANNELS.forEach((c, i) => {
+        const col = el('div', 'big-col'), bar = el('div', 'big-bar'), val = el('div', 'big-val'), name = el('div', 'big-name');
+        for (let k = 0; k < SEG; k++) bar.appendChild(el('span'));
+        col.append(bar, val, name); big.append(col); bigCols.push({ bar, val, name, peak: 0, peakAt: 0 });
+      });
+      strips.after(big);
+    }
+    $('#view').setAttribute('aria-pressed', S.view ? 'true' : 'false');
+    fit(); render(); save();
+    if (!quiet) toast(VIEW_NAMES[S.view]);
+  }
+  function bigRender() {
+    if (S.view !== 'meters' || !big) return;
+    const live = metersLive(), now = performance.now();
+    bigCols.forEach((o, i) => {
+      const c = CHANNELS[i], db = live ? byteDb(B.meters[i] || 0) : null;
+      const lvl = S.mutes[i] ? 0 : live ? meterScale(db) / 100 : S.levels[S.bus][i] / 127;
+      const lit = Math.round(lvl * SEG);
+      if (lit >= o.peak || now - o.peakAt > 1500) { o.peak = lit; o.peakAt = now; }
+      [...o.bar.children].forEach((d, k) => {
+        const idx = SEG - 1 - k;
+        d.className = idx < lit ? (idx >= SEG - 3 ? 'on hot' : idx >= SEG - 8 ? 'on warm' : 'on') : idx === o.peak - 1 && o.peak > 0 ? 'peak' : '';
+      });
+      o.val.textContent = S.mutes[i] ? 'mute' : live ? (db < -70 ? '-∞' : fmt(Math.round(db))) .replace(',0', '') : levelDb(S.levels[S.bus][i]).replace(/,\d$/, '');
+      o.name.textContent = c.master ? BUSES[S.bus].short : S.names[i];
+      o.name.classList.toggle('sel', i === S.sel);
+    });
+  }
   function renderMeters() {
+    bigRender();
     refs.forEach((r, i) => {
-      const lit = S.mutes[i] ? 0 : Math.round(meterScale(byteDb(B.meters[i] || 0)) / 100 * 12);
+      const lit = S.mutes[i] ? 0 : Math.round(meterScale(byteDb(B.meters[i] || 0)) / 100 * ROWS);
       [...r.col.children].forEach((d, k) => {
-        const idx = 11 - k;
-        d.className = idx < lit ? (idx >= 10 ? 'on hot' : 'on') : '';
+        const idx = ROWS - 1 - k;
+        d.className = idx < lit ? (idx >= ROWS - 2 ? 'on hot' : 'on') : '';
       });
     });
   }
@@ -1243,10 +1286,10 @@
       const muted = S.mutes[i];
       const sel = i === S.sel;
       // display column = live meter from the mixer when we get one, else the fader position
-      const lit = muted ? 0 : Math.round(v / 127 * 12);
+      const lit = muted ? 0 : Math.round(v / 127 * ROWS);
       if (!metersLive()) [...r.col.children].forEach((d, k) => {
-        const idx = 11 - k; // top dot first
-        d.className = idx < lit ? (idx >= 10 ? 'on hot' : 'on') : '';
+        const idx = ROWS - 1 - k; // top dot first
+        d.className = idx < lit ? (idx >= ROWS - 2 ? 'on hot' : 'on') : '';
       });
       r.col.classList.toggle('sel', sel);
       r.col.classList.toggle('muted', muted);
@@ -1279,7 +1322,7 @@
     $('#sel-name').textContent = sc.master ? bus.label : S.names[S.sel];
     $('#sel-name').classList.toggle('muted', !!S.mutes[S.sel]);
     $('#sel-level').textContent = (sc.master ? 'poziom ' : (S.bus === 0 ? 'poziom ' : 'wysyłka ')) + levelDb(lv[S.sel]) + ' dB';
-    chanRender();
+    chanRender(); bigRender();
     $('#sel-gain').textContent = (sc.gain ? 'gain ' + gainDb(S.gains[S.sel]) + ' dB  ' : '') + (panOk(S.sel) ? 'pan ' + panText(S.pans[S.sel]) : '');
     $('#bus-label').textContent = 'miks: ' + bus.label;
 
@@ -1388,6 +1431,7 @@
   build();
   metroBuild();
   render();
+  if (S.view) setView(S.view, true);
   requestAnimationFrame(() => scrollToSel(false));
   setConn('idle');
   // reconnect silently if permission was already granted earlier

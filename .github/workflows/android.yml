@@ -46,8 +46,10 @@ jobs:
         run: |
           VER=$(grep -o "APP_VERSION = '[^']*'" app.js | cut -d"'" -f2)
           cp android/app/build/outputs/apk/release/app-release.apk "flow8-control.apk"
-          gh release delete android --yes --cleanup-tag || true
-          gh release create android "flow8-control.apk" \
-            --title "FLOW 8 Control v$VER (Android)" \
-            --notes "Apka na Androida, wersja v$VER. Pobierz plik flow8-control.apk na telefonie i zainstaluj." \
-            --latest
+          # keep the release and replace its file: deleting and recreating it failed when GitHub answered 500
+          if gh release view android >/dev/null 2>&1; then
+            gh release upload android "flow8-control.apk" --clobber
+            gh release edit android --title "FLOW 8 Control v$VER (Android)" --notes "Apka na Androida, wersja v$VER. Pobierz plik flow8-control.apk na telefonie i zainstaluj." --latest
+          else
+            gh release create android "flow8-control.apk" --title "FLOW 8 Control v$VER (Android)" --notes "Apka na Androida, wersja v$VER. Pobierz plik flow8-control.apk na telefonie i zainstaluj." --latest
+          fi
