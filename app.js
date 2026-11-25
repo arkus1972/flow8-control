@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.9'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.10'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
 
   // ---------- Model ----------
@@ -191,7 +191,10 @@
           step = 'usługa'; const svc = await server.getPrimaryService(BLE_SVC);
           step = 'kanał danych'; const chr = await svc.getCharacteristic(BLE_CHR);
           chr.addEventListener('characteristicvaluechanged', bleOnValue);   // same fn → never doubled
-          step = 'powiadomienia'; await chr.startNotifications();
+          // FLOW 8 marks the characteristic "notify" but has no CCCD descriptor, so Chrome
+          // may refuse startNotifications ("Not supported"). The mixer notifies anyway, so go on.
+          try { await chr.startNotifications(); B.notify = true; }
+          catch (err) { B.notify = false; }
           B.chr = chr; lastErr = null;
           break;
         } catch (err) {
@@ -204,7 +207,15 @@
       if (lastErr) throw Object.assign(new Error(step + ': ' + ((lastErr && lastErr.message) || lastErr)), { step });
       dev.addEventListener('gattserverdisconnected', bleLost);
       // the mixer greets with 0x35; answer anyway if the greeting got lost
-      B.hsTimer = setTimeout(bleHello, 1200);
+      B.heard = false;
+      B.hsTimer = setTimeout(bleHello, B.notify ? 1200 : 200);
+      // nothing heard back: still usable one way (like USB), so say so
+      setTimeout(() => {
+        if (B.chr && !B.ready) {
+          B.ready = true; B.oneWay = true; setConn('ble'); render();
+          toast('Połączono przez Bluetooth, ale tylko w jedną stronę: telefon nie odbiera danych z miksera.');
+        }
+      }, 2500);
     } catch (e) {
       if (e && e.name === 'NotFoundError') { setConn('idle'); return; }   // picker closed
       toast('Nie udało się połączyć (' + ((e && e.message) || e) + '). Zamknij FLOW Mix, wyłącz i włącz Bluetooth, spróbuj ponownie.');
@@ -227,6 +238,7 @@
   }
   function bleRx(b) {
     if (b.length < 3) return;
+    if (!B.heard) { B.heard = true; if (B.oneWay) { B.oneWay = false; setConn('ble'); toast('Odbiór z miksera działa.'); } }
     if ((b.slice(0, -1).reduce((a, x) => a + x, 0) & 255) !== b[b.length - 1]) return;   // bad checksum
     const cmd = b[0], count = b[1];
     let p;
@@ -279,7 +291,7 @@
   function bleLost() {
     clearTimeout(B.hsTimer);
     const was = B.ready;
-    Object.assign(B, { chr: null, ready: false, busy: false });
+    Object.assign(B, { chr: null, ready: false, busy: false, oneWay: false, heard: false });
     B.pending.clear(); B.frags.clear();
     setConn('idle'); render();
     if (was) toast('Rozłączono Bluetooth.');
@@ -317,7 +329,7 @@
     if (B.ready && state !== 'ble') state = 'ble';
     led.className = 'led' + (state === 'ok' || state === 'ble' ? ' ok' : state === 'demo' || state === 'other' || state === 'busy' ? ' demo' : '');
     label.textContent =
-      state === 'ble' ? 'FLOW 8 · Bluetooth' :
+      state === 'ble' ? (B.oneWay ? 'FLOW 8 · Bluetooth (1 strona)' : 'FLOW 8 · Bluetooth') :
       state === 'busy' ? 'Łączę przez Bluetooth…' :
       state === 'ok' ? 'FLOW 8 · kabel USB' :
       state === 'other' ? 'Nie widzę FLOW 8, podłącz USB' :
