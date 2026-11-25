@@ -570,6 +570,12 @@ button:focus-visible, input:focus-visible, .knob:focus-visible {
   .device { width: calc(100% / var(--k, 1)); height: calc(100% / var(--k, 1)); transform: scale(var(--k, 1)); transform-origin: 0 0; }
 }
 
+/* Tablets held upright show the phone's one-channel view enlarged as a whole and centred (--k, --dw, --dx from app.js). */
+@media (orientation: portrait) and (min-width: 500px) {
+  html, body { overflow: hidden; }
+  .device { width: var(--dw, 100%); height: calc(100% / var(--k, 1)); transform: translateX(var(--dx, 0px)) scale(var(--k, 1)); transform-origin: 0 0; }
+}
+
 /* very short phones held upright: a smaller gain knob keeps the whole fader on screen */
 @media (orientation: portrait) and (max-height: 680px) {
   .strip { grid-template-rows: 48px minmax(104px, 152px) minmax(68px, 80px) 34px minmax(28px, 1fr); }

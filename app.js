@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.29'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.30'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -513,7 +513,7 @@
       fader.addEventListener('pointerdown', e => {
         e.preventDefault(); select(i); fader.focus({ preventScroll: true });
         fader.setPointerCapture(e.pointerId);
-        const r = fader.getBoundingClientRect(), th = portrait() ? 56 : 34 * K;
+        const r = fader.getBoundingClientRect(), th = (portrait() ? 56 : 34) * K;
         const travel = r.height - th, cur = +fader.value;
         const thumbY = r.bottom - th / 2 - cur / 127 * travel;
         drag = { id: e.pointerId, travel, y0: e.clientY, v0: cur };
@@ -619,7 +619,7 @@
     });
     knob.addEventListener('pointermove', e => {
       if (!active) return;
-      const scale = portrait() ? 0.5 : 0.8;
+      const scale = (portrait() ? 0.5 : 0.8) / K;
       setGain(i, startV + (startY - e.clientY) * scale);
     });
     const end = () => { active = false; };
@@ -664,8 +664,15 @@
     const compact = matchMedia('(orientation: landscape) and (max-height: 700px)').matches;
     const cs = getComputedStyle(document.body), px = v => parseFloat(v) || 0;
     const w = innerWidth - px(cs.paddingLeft) - px(cs.paddingRight), h = innerHeight - px(cs.paddingTop) - px(cs.paddingBottom);
+    const tall = matchMedia('(orientation: portrait) and (min-width: 500px)').matches;
     K = compact ? Math.min(2, w / 899, h / 396) : 1;          // small tablets get the same layout, enlarged
-    document.documentElement.style.setProperty('--k', K);
+    const root = document.documentElement.style;
+    if (tall) {                                               // tablets held upright: the phone view, enlarged and centred
+      K = Math.max(1, Math.min(w / 374, h / 828));
+      const dw = Math.min(w / K, 440);
+      root.setProperty('--dw', dw + 'px'); root.setProperty('--dx', (w - dw * K) / 2 + 'px');
+    }
+    root.setProperty('--k', K);
   }
   addEventListener('resize', fit); fit();
   function setGain(i, v) {
