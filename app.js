@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.14'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.15'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -60,7 +60,8 @@
     if (v <= 0) return '-∞';
     if (!B.ready) return fmt(-70 + (v - 1) * 80 / 126);
     const f = v / 127;
-    return fmt(f >= 0.5 ? 40 * f - 30 : f >= 0.25 ? 80 * f - 50 : f >= 0.0625 ? 160 * f - 70 : 480 * f - 90);
+    const d = Math.round(f >= 0.5 ? 40 * f - 30 : f >= 0.25 ? 80 * f - 50 : f >= 0.0625 ? 160 * f - 70 : 480 * f - 90);
+    return d < -70 ? '-∞' : (d > 0 ? '+' : d < 0 ? '-' : '') + Math.abs(d);   // whole dB, as the mixer shows
   };
   const gainDb = v => fmt(-20 + v * 80 / 127);
   function fmt(d) {
@@ -303,7 +304,7 @@
         const i = p[0] === p[1] ? CHANNELS.findIndex(c => c.master) : idx(p[0]);
         if (i < 0 || bi < 0) break;
         if (now - (B.touched.get(p[0]) || 0) < 400) break;        // ignore echoes while the user drags
-        S.levels[bi][i] = Math.round(p[2] * 127 / 255);
+        S.levels[bi][i] = p[2] * 127 / 255;               // keep full mixer resolution
         render(); save(); break;
       }
       case 0x27: {                                                // snapshot list: [len][name]…
@@ -314,7 +315,7 @@
       case 0x02: {                                                // gain
         const i = idx(p[0]);
         if (i < 0 || now - (B.touched.get('g' + p[0]) || 0) < 400) break;
-        S.gains[i] = Math.max(0, Math.min(127, Math.round((p[1] - 0x50) * 127 / 160)));
+        S.gains[i] = Math.max(0, Math.min(127, (p[1] - 0x50) * 127 / 160));
         render(); save(); break;
       }
       case 0x08: { const i = idx(p[0]); if (i >= 0) { S.mutes[i] = !!p[1]; render(); save(); } break; }
@@ -333,26 +334,29 @@
   function bleMixerState(p) {
     let k = 0;
     const gains = [];
+    const flags = [];
     for (let ch = 0; ch < 7; ch++) {
       if (p[k] !== ch || k + 27 > p.length) return;               // layout not as expected: ignore
-      gains[ch] = p[k + 2];
+      gains[ch] = p[k + 2]; flags[ch] = p[k + 1];               // flags: bit0 mute, bit6 solo (as in FLOW Mix)
       k += 27 + p[k + 26];
     }
-    const lv = BUSES.map(() => null), master = BUSES.map(() => null);
+    const lv = BUSES.map(() => null), master = BUSES.map(() => null); let mainMute = null;
     while (k < p.length) {
       const id = p[k], bi = BUSES.findIndex(b => b.dst === id);
       if (bi < 0) break;
       if (id === 0x0c || id === 0x0d) { lv[bi] = Array.from(p.slice(k + 8, k + 15)); k += 17; }
-      else { master[bi] = p[k + 2]; lv[bi] = Array.from(p.slice(k + 5, k + 12)); k += 52; }
+      else { master[bi] = p[k + 2]; if (id === 0x0f) mainMute = !!(p[k + 1] & 1); lv[bi] = Array.from(p.slice(k + 5, k + 12)); k += 52; }
     }
-    const to127 = x => Math.round(x * 127 / 255);
+    const to127 = x => x * 127 / 255;
     CHANNELS.forEach((c, i) => {
       if (c.master) return;
-      if (c.gain) S.gains[i] = Math.max(0, Math.min(127, Math.round((gains[c.ble] - 0x50) * 127 / 160)));
+      if (c.gain) S.gains[i] = Math.max(0, Math.min(127, (gains[c.ble] - 0x50) * 127 / 160));
+      S.mutes[i] = !!(flags[c.ble] & 1); S.solos[i] = !!(flags[c.ble] & 0x40);
       BUSES.forEach((b, bi) => { if (lv[bi] && lv[bi].length === 7) S.levels[bi][i] = to127(lv[bi][c.ble]); });
     });
     const mi = CHANNELS.findIndex(c => c.master);
     BUSES.forEach((b, bi) => { if (master[bi] !== null) S.levels[bi][mi] = to127(master[bi]); });
+    if (mainMute !== null) S.mutes[mi] = mainMute;
     render(); save();
   }
 
