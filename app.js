@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.49'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.50'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -513,6 +513,7 @@
       S.tempo = p[k + 3] << 8 | p[k + 4]; S.scope = p[k + 8];
       const last = p[k + 6] > 127 ? -1 : p[k + 6]; if (last >= 0) S.scene = last;
     }
+    { const low = [0, 1, 2].filter(b => S.lim[b] <= -15).map(b => BUSES[b].short); if (low.length) toastOnce('lim' + low.join(), 'Uwaga: limiter (' + low.join(', ') + ') ma niski próg i mocno ścisza głośne dźwięki. Zmienisz to w Ustawieniach miksera.'); }
     const to127 = x => x * 127 / 255;
     CHANNELS.forEach((c, i) => {
       if (c.master) return;
@@ -1022,12 +1023,24 @@
     const body = subPage('ustawienia', 'mikser');
     const row = (label, o) => mkRow(label, o, subRows);
     let g = grp(body, 'wyjścia');
-    [0, 1, 2].forEach(bi => g.append(row('limiter ' + BUSES[bi].short, {
-      get: () => (S.lim[bi] + 30) / 30,
-      set: p => { S.lim[bi] = Math.round((p * 30 - 30) * 2) / 2; bleLimiter(bi); },
-      text: () => { const gr = B.ready && bi === 0 ? (B.gr || 0) >> 14 & 3 : 0; return (gr ? '•'.repeat(gr) + ' ' : '') + fmt(S.lim[bi]).replace(',0', '') + ' dB'; },   // dots = limiter working right now
-      ask: () => askNum('Limiter ' + BUSES[bi].short + ' (dB)', fmt(S.lim[bi]).replace('+', ''), 'Od -30 do 0, co 0,5 dB.', -30, 0, d => { S.lim[bi] = Math.round(d * 2) / 2; bleLimiter(bi); })
-    })));
+    // FLOW Mix shows one limiter for both monitors while they are linked as a stereo pair
+    const limRow = (label, list) => {
+      const bi = list[0];
+      const put = d => { list.forEach(b => { S.lim[b] = d; bleLimiter(b); }); };
+      const r = row(label, {
+        get: () => (S.lim[bi] + 30) / 30,
+        set: p => put(Math.round((p * 30 - 30) * 2) / 2),
+        text: () => { const gr = B.ready && bi === 0 ? (B.gr || 0) >> 14 & 3 : 0; return (gr ? '•'.repeat(gr) + ' ' : '') + fmt(S.lim[bi]).replace(',0', '') + ' dB'; },   // dots = limiter working right now
+        ask: () => askNum('Limiter ' + label.replace('limiter ', '') + ' (dB)', fmt(S.lim[bi]).replace('+', ''), 'Od -30 do 0, co 0,5 dB.', -30, 0, d => put(Math.round(d * 2) / 2))
+      });
+      g.append(r); return r;
+    };
+    limRow('limiter ' + BUSES[0].short, [0]);
+    const l1 = limRow('limiter ' + BUSES[1].short, [1]), l2 = limRow('limiter ' + BUSES[2].short, [2]), l12 = limRow('limiter mon 1/2', [1, 2]);
+    subRows.push(() => { const pair = !!S.cfg[11]; l1.hidden = l2.hidden = pair; l12.hidden = !pair; });
+    const warn = el('div', 'cfg-note warn');
+    subRows.push(() => { const low = [0, 1, 2].filter(b => S.lim[b] <= -15).map(b => BUSES[b].short); warn.hidden = !low.length; warn.textContent = 'Uwaga: niski próg limitera (' + low.join(', ') + ') mocno ścisza głośne dźwięki. Zwykle ustawia się go blisko 0 dB.'; });
+    g.append(warn);
     cfg(g, 'wyjście sala', 14, [['+4 dBu', 0], ['-10 dBV', 1]]);
     cfg(g, 'wyjścia mon', 15, [['+4 dBu', 0], ['-10 dBV', 1]]);
     const d = el('div', 'cfg-note'); subRows.push(() => { d.textContent = 'opóźnienie: sala ' + fmt(S.dly[0]).replace('+', '') + ' ms, mon 1 ' + fmt(S.dly[1]).replace('+', '') + ' ms, mon 2 ' + fmt(S.dly[2]).replace('+', '') + ' ms'; }); g.append(d);
@@ -1283,7 +1296,7 @@
   function setPan(i, v) {
     const n = Math.max(-50, Math.min(50, Math.round(v)));
     if (n === S.pans[i] || !panOk(i)) return;
-    S.pans[i] = n; sendPan(i); render(); save();
+    S.pans[i] = n; if (n === 0 || n === -50 || n === 50) bump(); sendPan(i); render(); save();
   }
   // phone held sideways: the layout is designed at 915 x 412 and scaled to the real screen
   let K = 1;
@@ -1323,27 +1336,25 @@
       o2.connect(g2); g2.connect(c.destination); o2.start(t); o2.stop(t + 0.045);
     } catch (e) {}
   }
-  // soft hiss of a fader cap sliding in its slot: looped filtered noise, loudness follows the finger speed
-  let hiss = null, hissAt = 0, hissV = 0;
-  function slide(v) {
+  // a light tap of the motor: the fader reaching 0 dB, top or bottom, the pan reaching centre or an end
+  function bump() {
     if (S.click === false) return;
+    try { if (NATIVE && NATIVE.buzz) NATIVE.buzz({ soft: true }).catch(() => {}); else if (navigator.vibrate) navigator.vibrate(8); } catch (e) {}
+  }
+  // fader sound: one very quiet, soft tick per 0.5 dB step, like a fine detent (the earlier hiss was too coarse)
+  let tickAt = 0, lastDb = '';
+  function slide(v) {
+    const db = levelDb(v), was = lastDb; lastDb = db;
+    if (db === was) return;
+    if (was !== '' && (db === '0,0' || v >= 127 || v <= 0)) bump();
+    if (S.click === false) return;
+    const now = performance.now(); if (now - tickAt < 28) return; tickAt = now;
     try {
-      const c = audio(), now = performance.now();
-      if (!hiss) {
-        const buf = c.createBuffer(1, c.sampleRate, c.sampleRate), d = buf.getChannelData(0);
-        for (let k = 0; k < d.length; k++) d[k] = Math.random() * 2 - 1;
-        const src = c.createBufferSource(), bp = c.createBiquadFilter(), g = c.createGain();
-        src.buffer = buf; src.loop = true; bp.type = 'bandpass'; bp.frequency.value = 2200; bp.Q.value = 0.7; g.gain.value = 0;
-        src.connect(bp); bp.connect(g); g.connect(c.destination); src.start();
-        hiss = { g, bp };
-      }
-      const dt = Math.max(8, now - hissAt), speed = Math.min(1, Math.abs(v - hissV) / dt * 6);
-      hissAt = now; hissV = v;
-      const t = c.currentTime;
-      hiss.g.gain.cancelScheduledValues(t);
-      hiss.g.gain.setTargetAtTime(0.03 + speed * 0.11, t, 0.015);
-      hiss.g.gain.setTargetAtTime(0, t + 0.07, 0.05);
-      hiss.bp.frequency.setTargetAtTime(1600 + speed * 2600, t, 0.03);
+      const c = audio(), t = c.currentTime, o = c.createOscillator(), g = c.createGain(), f = c.createBiquadFilter();
+      o.type = 'triangle'; o.frequency.setValueAtTime(1500, t); o.frequency.exponentialRampToValueAtTime(700, t + 0.008);
+      f.type = 'lowpass'; f.frequency.value = 2600;
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.035, t + 0.001); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.012);
+      o.connect(f); f.connect(g); g.connect(c.destination); o.start(t); o.stop(t + 0.015);
     } catch (e) {}
   }
   function setGain(i, v) {

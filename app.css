@@ -786,3 +786,6 @@ html.v-meters .big { display: grid; grid-template-columns: repeat(8, minmax(0, 1
 .diag-update .key.wide { flex: 0 0 auto; width: auto; padding: 0 14px; }
 .diag { grid-template-rows: auto auto 1fr auto; }
 .diag-update .key.wide.go { background: var(--accent); color: #fff; }
+
+.chan-row[hidden], .cfg-note[hidden] { display: none; }
+.cfg-note.warn { color: var(--accent); }

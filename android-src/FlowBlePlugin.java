@@ -204,9 +204,10 @@ public class FlowBlePlugin extends Plugin {
         try {
             Vibrator v = (Vibrator) getContext().getSystemService(Context.VIBRATOR_SERVICE);
             if (v != null && v.hasVibrator()) {
-                if (Build.VERSION.SDK_INT >= 29) v.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_HEAVY_CLICK));
-                else if (Build.VERSION.SDK_INT >= 26) v.vibrate(VibrationEffect.createOneShot(25, 255));
-                else v.vibrate(25);
+                boolean soft = Boolean.TRUE.equals(call.getBoolean("soft", false));
+                if (Build.VERSION.SDK_INT >= 29) v.vibrate(VibrationEffect.createPredefined(soft ? VibrationEffect.EFFECT_TICK : VibrationEffect.EFFECT_HEAVY_CLICK));
+                else if (Build.VERSION.SDK_INT >= 26) v.vibrate(VibrationEffect.createOneShot(soft ? 10 : 25, soft ? 120 : 255));
+                else v.vibrate(soft ? 10 : 25);
             }
         } catch (Exception e) { }
         call.resolve();
