@@ -21,6 +21,7 @@
           <button class="pill dot" id="connect" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="conn-menu"><span class="led" id="conn-led"></span></button>
           <div class="conn-menu" id="conn-menu" hidden>
             <div class="conn-status" id="conn-label">Połącz z mikserem</div>
+            <button class="key wide" id="lock" type="button">Zablokuj ekran</button>
             <button class="key wide" id="conn-ble" type="button">Bluetooth</button>
             <button class="key wide" id="conn-usb" type="button">Kabel USB</button>
             <button class="key wide" id="sync" type="button">Wyślij wszystko do miksera</button>
@@ -57,9 +58,6 @@
       <button class="tool metro-btn" id="metro-open" type="button" aria-label="Metronom" aria-expanded="false" aria-controls="metro" title="Metronom">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l4 18H5z"/><path d="M12 15l5-8"/></svg>
         <span class="beat-led" id="beat-led"></span>
-      </button>
-      <button class="tool" id="lock" type="button" aria-label="Zablokuj ekran" title="Blokada">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
       </button>
       <button class="tool" id="view" type="button" aria-pressed="false" aria-label="Zmień widok: pełny, same suwaki, same wskaźniki" title="Widok">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>

@@ -445,7 +445,7 @@ button:focus-visible, input:focus-visible, .knob:focus-visible {
   .strips { scroll-behavior: auto; }
 }
 
-@media (orientation: portrait) and (max-width: 440px) {
+@media (orientation: portrait) and (max-width: 380px) {
   .scene, .tool { width: 44px; height: 44px; }
   .scene-keys, .tools { gap: 6px; }
   .bar { column-gap: var(--u); }
@@ -848,11 +848,3 @@ html.v-meters .big { display: grid; grid-template-columns: repeat(8, minmax(0, 1
 .preset-parts { display: flex; gap: 6px; flex-wrap: wrap; }
 .preset-io { display: flex; gap: 6px; flex-wrap: wrap; }
 .preset-paste { width: 100%; min-height: 120px; font: 12px ui-monospace, monospace; border-radius: 8px; padding: 8px; box-sizing: border-box; background: var(--screen); color: var(--screen-ink); border: 1px solid var(--ring-2); }
-@media (orientation: portrait) and (max-width: 440px) {
-  .scene { width: 36px; height: 40px; }
-  .tool { width: 40px; height: 40px; }
-  .scene-keys, .tools { gap: 4px; }
-}
-@media (orientation: portrait) and (max-width: 370px) {
-  #theme { display: none; }     /* theme is also on the app settings page */
-}
