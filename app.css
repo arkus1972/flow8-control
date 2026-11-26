@@ -801,3 +801,6 @@ html.v-meters .big { display: grid; grid-template-columns: repeat(8, minmax(0, 1
 .chan-color { width: 44px; height: 30px; border-radius: 7px; border: 0; padding: 0; background: var(--cap); cursor: pointer;
   box-shadow: 0 4px 8px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.4), inset 0 -2px 0 rgba(0,0,0,.18), inset 0 -15px 0 -13px var(--mark); }
 .chan-color[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 3px; }
+.chan-color.own { width: auto; padding: 0 12px; font-family: Doto, ui-monospace, monospace; font-weight: 900; font-size: 13px; color: #1C1C1C;
+  background: linear-gradient(90deg, #E8501A, #F2B807, #1FA36B, #22B8CF, #2F5BEA, #8A4FE0, #D8345F); box-shadow: 0 4px 8px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.4), inset 0 -2px 0 rgba(0,0,0,.18); }
+.chan-row[hidden] { display: none; }

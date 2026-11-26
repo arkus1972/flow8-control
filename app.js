@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.55'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.56'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -620,7 +620,6 @@
 
       // strip
       const strip = el('section', 'strip', { 'aria-label': 'Kanał ' + S.names[i] });
-      paint(strip, i);
 
       const head = el('div', 's-head');
       const num = el('span', 's-num'); num.textContent = c.num;
@@ -709,7 +708,7 @@
       const unhold = () => { clearTimeout(hold); hold = 0; };
       faderWrap.addEventListener('pointerdown', e => {
         hx = e.clientX; hy = e.clientY; unhold();
-        hold = setTimeout(() => { hold = 0; drag = null; if (navigator.vibrate) navigator.vibrate(15); if (CHANNELS[i].master) { if (S.bus < 3) openEq(eqOutput(S.bus)); } else openChan(i); }, 550);
+        hold = setTimeout(() => { hold = 0; drag = null; if (navigator.vibrate) navigator.vibrate(15); if (CHANNELS[i].master) { if (S.bus < 3) openEq(eqOutput(S.bus)); else openMasterColor(i); } else openChan(i); }, 550);
       });
       faderWrap.addEventListener('pointermove', e => { if (hold && Math.hypot(e.clientX - hx, e.clientY - hy) > 8) unhold(); });
       ['pointerup', 'pointercancel', 'pointerleave'].forEach(t => faderWrap.addEventListener(t, unhold));
@@ -727,6 +726,7 @@
       pager.appendChild(pg);
 
       refs.push({ col, strip, name, knob, kl, mute, solo, fader, val, pg, pan });
+      paint(i);
     });
 
     // scenes = mixer snapshots 1..4 (global channel, program change)
@@ -798,8 +798,62 @@
   }
 
   // the channel's colour (fader cap and gain knob): the user's choice from PALETTE, else the built-in one
-  function capOf(i) { const p = S.colors && PALETTE[S.colors[i]]; return p || [CHANNELS[i].cap, CHANNELS[i].mark]; }
-  function paint(node, i) { const c = capOf(i); node.style.setProperty('--cap', c[0]); node.style.setProperty('--mark', c[1]); }
+  // 'colF' = fader cap, 'colK' = gain knob; each entry is a PALETTE index or an own colour [hue, saturation, lightness]
+  if (S.colors && !S.colF) { S.colF = S.colors.slice(); S.colK = S.colors.slice(); }
+  delete S.colors;
+  function hslHex(h, sat, l) {
+    sat /= 100; l /= 100;
+    const a = sat * Math.min(l, 1 - l), fn = n => { const k = (n + h / 30) % 12; return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)); };
+    const rgb = [fn(0), fn(8), fn(4)];
+    const hex = '#' + rgb.map(x => Math.round(x * 255).toString(16).padStart(2, '0')).join('').toUpperCase();
+    return [hex, 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2] > 0.6 ? '#1C1C1C' : '#FFFFFF'];   // the mark is dark on light caps
+  }
+  function capOf(i, key) {
+    const v = S[key] && S[key][i];
+    if (Array.isArray(v)) return hslHex(v[0], v[1], v[2]);
+    return PALETTE[v] || [CHANNELS[i].cap, CHANNELS[i].mark];
+  }
+  function paint(i) {
+    const r = refs[i]; if (!r) return;
+    const f = capOf(i, 'colF'), k = capOf(i, 'colK');
+    r.strip.style.setProperty('--cap', f[0]); r.strip.style.setProperty('--mark', f[1]);
+    r.knob.style.setProperty('--cap', k[0]); r.knob.style.setProperty('--mark', k[1]);
+  }
+  // colour chooser: the palette, plus an own colour mixed with three sliders
+  function colorGroup(body, title, key, i, rows) {
+    const g = el('div', 'chan-group'), t = el('div', 'chan-title'), box = el('div', 'chan-colors'); t.textContent = title; g.append(t, box);
+    const put = v => { S[key] = S[key] || []; S[key][i] = v; paint(i); chanRender(); save(); };
+    const own = () => Array.isArray(S[key] && S[key][i]) ? S[key][i] : null;
+    PALETTE.forEach((pc, k) => {
+      const b = el('button', 'chan-color', { type: 'button', 'aria-label': 'Kolor ' + (k + 1), 'aria-pressed': 'false' });
+      b.style.setProperty('--cap', pc[0]); b.style.setProperty('--mark', pc[1]);
+      b.addEventListener('click', () => put(k));
+      rows.push(() => { const c = capOf(i, key); b.setAttribute('aria-pressed', !own() && c[0] === pc[0] && c[1] === pc[1] ? 'true' : 'false'); });
+      box.append(b);
+    });
+    const ob = el('button', 'chan-color own', { type: 'button', 'aria-pressed': 'false' }); ob.textContent = 'własny';
+    S.ownCol = S.ownCol || {};
+    ob.addEventListener('click', () => { if (!own()) put((S.ownCol[key] || [150, 70, 45]).slice()); });
+    box.append(ob);
+    const mix = (label, n, max, unit) => {
+      const r = mkRow(label, {
+        get: () => (own() || [0, 0, 0])[n] / max,
+        set: p => { const o = own(); if (!o) return; o[n] = Math.round(p * max); S.ownCol[key] = o.slice(); paint(i); },
+        text: () => (own() || [0, 0, 0])[n] + unit,
+        ask: () => askNum(label + ' (0-' + max + ')', String((own() || [0, 0, 0])[n]), '', 0, max, d => { const o = own(); if (o) { o[n] = Math.round(d); S.ownCol[key] = o.slice(); paint(i); } })
+      }, rows);
+      g.append(r); return r;
+    };
+    const m = [mix('barwa', 0, 360, '°'), mix('nasycenie', 1, 100, '%'), mix('jasność', 2, 100, '%')];
+    rows.push(() => {
+      const o = own(); m.forEach(r => { r.hidden = !o; });
+      ob.setAttribute('aria-pressed', o ? 'true' : 'false');
+      if (o) { const c = hslHex(o[0], o[1], o[2]); ob.style.background = c[0]; ob.style.color = c[1]; } else { ob.style.background = ''; ob.style.color = ''; }
+    });
+    body.append(g);
+  }
+  // holding the master fader on fx 1 / fx 2 (no output EQ there): just its colour
+  function openMasterColor(i) { const body = subPage('kolor', S.names[i] || 'main'); colorGroup(body, 'kolor suwaka', 'colF', i, subRows); chanRender(); }
   function bindKnob(knob, i) {
     let startY = 0, startV = 0, active = false; const det = detent('detK', () => GAIN_ZERO);
     knob.addEventListener('pointerdown', e => {
@@ -995,16 +1049,8 @@
     if (CHANNELS[i].ble < 2) toggle('48 V', 'p48', 0x15, 'Włączyć zasilanie phantom 48 V na kanale ' + CHANNELS[i].num + '? Ścisz najpierw kanał.');
     if (CHANNELS[i].ble < 4) toggle('odwróć fazę', 'phase', 0x10);
     body.append(sw);
-    // colour of this channel's fader cap and gain knob
-    const cg = el('div', 'chan-group'), ct = el('div', 'chan-title'), cr = el('div', 'chan-colors'); ct.textContent = 'kolor suwaka i gałki'; cg.append(ct, cr);
-    PALETTE.forEach((pc, k) => {
-      const b = el('button', 'chan-color', { type: 'button', 'aria-label': 'Kolor ' + (k + 1), 'aria-pressed': 'false' });
-      b.style.setProperty('--cap', pc[0]); b.style.setProperty('--mark', pc[1]);
-      b.addEventListener('click', () => { S.colors = S.colors || []; S.colors[i] = k; paint(refs[i].strip, i); chanRender(); save(); });
-      chanRows.push(() => b.setAttribute('aria-pressed', capOf(i)[0] === pc[0] && capOf(i)[1] === pc[1] ? 'true' : 'false'));
-      cr.append(b);
-    });
-    body.append(cg);
+    colorGroup(body, 'kolor suwaka', 'colF', i, chanRows);
+    if (CHANNELS[i].gain) colorGroup(body, 'kolor gałki', 'colK', i, chanRows);
     page.append(head, body);
     $('#device').append(page);
     chanRender();
@@ -1273,6 +1319,7 @@
     }
     subRows.push(draw);
     rebuild();
+    if (T.i < 0) { colorGroup(body, 'kolor suwaka', 'colF', CHANNELS.length - 1, subRows); chanRender(); }   // output page: colour of the master fader
   }
 
   // ----- Effects: program and parameters of FX 1 / FX 2 (names as in the mixer), plus this channel's sends -----
