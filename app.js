@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.53'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.54'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -671,7 +671,7 @@
         if (v === S.levels[S.bus][i]) return;
         fader.value = Math.round(v); S.levels[S.bus][i] = v; slide(v); sendLevel(i); render(); save();
       };
-      let drag = null; const det = detent();
+      let drag = null; const det = detent('detF', zeroPos);
       fader.addEventListener('pointerdown', e => {
         e.preventDefault(); select(i); fader.focus({ preventScroll: true });
         fader.setPointerCapture(e.pointerId);
@@ -794,14 +794,14 @@
   }
 
   function bindKnob(knob, i) {
-    let startY = 0, startV = 0, active = false;
+    let startY = 0, startV = 0, active = false; const det = detent('detK', () => GAIN_ZERO);
     knob.addEventListener('pointerdown', e => {
-      knob.setPointerCapture(e.pointerId); active = true; startY = e.clientY; startV = S.gains[i]; select(i);
+      knob.setPointerCapture(e.pointerId); active = true; startY = e.clientY; startV = S.gains[i]; det.start(startV); select(i);
     });
     knob.addEventListener('pointermove', e => {
       if (!active) return;
       const scale = (portrait() ? 0.5 : 0.8) / K;
-      setGain(i, startV + (startY - e.clientY) * scale);
+      setGain(i, det.map(startV + (startY - e.clientY) * scale, scale));
     });
     const end = () => { active = false; };
     knob.addEventListener('pointerup', end);
@@ -939,11 +939,14 @@
       rows.forEach(r => g.append(r)); body.append(g);
     };
     const row = (label, o) => mkRow(label, o, chanRows);
-    group('poziomy', BUSES.map((b, bi) => row(b.label, {
+    group('poziomy', (CHANNELS[i].gain ? [row('gain', {
+      get: () => S.gains[i] / 127, set: p => setGain(i, p * 127),
+      text: () => gainDb(S.gains[i]).replace(',0', '') + ' dB', ask: () => askGain(i)
+    })] : []).concat(BUSES.map((b, bi) => row(b.label, {
       get: () => S.levels[bi][i] / 127,
       set: p => { S.levels[bi][i] = fine() ? Math.round(p * 255) * 127 / 255 : Math.round(p * 127); sendLevelBus(i, bi); },
       text: () => levelDb(S.levels[bi][i]) + ' dB', ask: () => askLevel(i, bi)
-    })), '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/>', () => openFx(i));
+    }))), '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/>', () => openFx(i));
     group('korektor', EQ_NAMES.map((n, b) => row(n, {
       mid: true, reset: 0.5,
       get: () => (S.eq[i][b] + 15) / 30,
@@ -1034,9 +1037,14 @@
     const sw = (label, k, opts, after) => choice(g, label, () => S[k] !== false, v => { S[k] = v; if (after) after(); }, opts || [['włączona', true], ['wyłączona', false]]);
     sw('gałka gain', 'vibK', null, () => notch());
     sw('suwak i pan', 'vibF', null, () => bump(true));
-    g = grp(body, 'suwak');
-    choice(g, 'zatrzask 0 dB', () => S.detent === false ? 0 : S.detent === 1 ? 1 : 2, v => { S.detent = v === 0 ? false : v; }, [['brak', 0], ['lekki', 1], ['mocny', 2]]);
-    const n = el('div', 'cfg-note'); n.textContent = 'Zatrzask łapie suwak na 0 dB i puszcza dopiero po wyraźnym ruchu palca. Wibracja suwaka odzywa się przy 0 dB, na końcach skali i w środku panoramy.'; g.append(n);
+    g = grp(body, 'zatrzask na 0 dB');
+    const dt = (label, k) => g.append(mkRow(label, {
+      get: () => S[k], set: p => { S[k] = Math.round(p * 20) / 20; },
+      text: () => S[k] <= 0 ? 'brak' : S[k] >= 0.995 ? 'stop' : Math.round(S[k] * 100) + '%',
+      ask: () => askNum('Zatrzask: ' + label + ' (%)', String(Math.round(S[k] * 100)), '0 = brak, 100 = stop na 0 dB.', 0, 100, d => { S[k] = Math.round(d) / 100; })
+    }, subRows));
+    dt('suwak', 'detF'); dt('gałka gain', 'detK');
+    const n = el('div', 'cfg-note'); n.textContent = 'Im dalej w prawo, tym mocniej 0 dB trzyma. Na końcu skali suwak staje na 0 dB i trzeba puścić palec, żeby pojechać dalej.'; g.append(n);
     chanRender();
   }
   function openSetup() {
@@ -1376,22 +1384,29 @@
   // 0 dB detent, like the centre click of a real fader. Once the cap reaches 0 dB it is caught there and
   // stays until the finger has moved a clear distance away from where it was caught (in either direction),
   // so stopping on 0 dB needs no precision. After the release the cap moves on without a jump.
-  const zeroPos = () => fine() ? 191 * 127 / 255 : 111;            // the position that reads 0,0 dB
-  const detentPx = () => S.detent === false ? 0 : S.detent === 1 ? 10 : 22;   // finger travel needed to break out: light / strong
-  function detent() {
-    let off = 0, lock = null, prev = 0;
+  const zeroPos = () => fine() ? 191 * 127 / 255 : 111;            // the fader position that reads 0,0 dB
+  const GAIN_ZERO = 20 * 127 / 80;                                 // the gain knob position of 0 dB
+  // detent strength, set on the app settings page: 0 = none, 1 = a hard stop at 0 dB (lift the finger to go on), between = finger travel to break out
+  if (S.detF === undefined) { S.detF = S.detent === false ? 0 : S.detent === 1 ? 0.15 : 0.5; }
+  if (S.detK === undefined) S.detK = 0.3;
+  delete S.detent;
+  const detentPx = k => { const p = S[k]; return p >= 0.995 ? Infinity : p * 80; };
+  function detent(key, zero) {
+    let off = 0, lock = null, prev = 0, first = false;
     return {
-      start(v) { off = 0; prev = v; lock = detentPx() && Math.abs(v - zeroPos()) < 0.3 ? v : null; },
+      start(v) { off = 0; prev = v; lock = detentPx(key) && Math.abs(v - zero()) < 0.3 ? v : null; first = true; },
       // r: where the cap would be without the detent, perPx: fader units per pixel of finger travel
       map(r, perPx) {
-        const B = detentPx() * K * perPx, z = zeroPos();
+        const z = zero();
+        // a drag that begins on 0 dB breaks out after a short move, so the hard stop never traps the cap there
+        const B = (first && lock !== null ? Math.min(detentPx(key), 12) : detentPx(key)) * K * perPx;
         if (!B) return r;
         if (lock !== null) {
           if (Math.abs(r - lock) <= B) return z;
-          off = z - (lock + Math.sign(r - lock) * B); lock = null; prev = r + off; return prev;
+          off = z - (lock + Math.sign(r - lock) * B); lock = null; first = false; prev = r + off; return prev;
         }
         const v = r + off;
-        if ((prev - z) * (v - z) <= 0) { lock = r; prev = z; return z; }
+        if ((prev - z) * (v - z) <= 0) { lock = r; first = false; prev = z; return z; }
         prev = v; return v;
       }
     };
@@ -1528,7 +1543,7 @@
         wrap.append(bar, mark);
         const o = { bar, val, name, mark, peak: 0, peakAt: 0, dragAt: 0 };
         // finger on a column: pull up for louder, down for quieter (relative, so touching never jumps)
-        let a = false, y0 = 0, v0 = 0; const det = detent();
+        let a = false, y0 = 0, v0 = 0; const det = detent('detF', zeroPos);
         col.addEventListener('pointerdown', e => { a = true; y0 = e.clientY; v0 = S.levels[S.bus][i]; det.start(v0); col.setPointerCapture(e.pointerId); select(i); o.dragAt = performance.now(); bigRender(); });
         col.addEventListener('pointermove', e => {
           if (!a) return;
