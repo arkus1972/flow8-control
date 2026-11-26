@@ -26,6 +26,7 @@
             <button class="key wide" id="sync" type="button">Wyślij wszystko do miksera</button>
             <button class="key wide" id="open-setup" type="button">Ustawienia miksera</button>
             <button class="key wide" id="open-scenes" type="button">Sceny</button>
+            <button class="key wide" id="open-presets" type="button">Presety kanałów</button>
             <button class="key wide" id="open-measure" type="button">Pomiar</button>
             <button class="key wide" id="open-app" type="button">Ustawienia aplikacji</button>
           </div>
@@ -57,6 +58,9 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l4 18H5z"/><path d="M12 15l5-8"/></svg>
         <span class="beat-led" id="beat-led"></span>
       </button>
+      <button class="tool" id="lock" type="button" aria-label="Zablokuj ekran" title="Blokada">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+      </button>
       <button class="tool" id="view" type="button" aria-pressed="false" aria-label="Zmień widok: pełny, same suwaki, same wskaźniki" title="Widok">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
       </button>
@@ -82,8 +86,16 @@
     <button class="key wide" id="meter" type="button" aria-label="Metrum">4/4</button>
     <button class="key wide go" id="metro-play" type="button" aria-pressed="false">Start</button>
   </div>
+  <div class="metro-opts" id="metro-opts"></div>
   <label class="metro-check"><input type="checkbox" id="metro-fx" checked> Wysyłaj tempo do efektu w mikserze</label>
 </section>
+<div class="lockscr" id="lockscr" hidden>
+  <button class="lock-key" id="unlock" type="button" aria-label="Przytrzymaj, aby odblokować">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+    <span class="lock-ring" id="lock-ring"></span>
+  </button>
+  <div class="lock-text">Zablokowane. Przytrzymaj kłódkę, aby odblokować.</div>
+</div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script src="app.js"></script>
 </body>

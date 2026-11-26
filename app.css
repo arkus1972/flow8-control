@@ -445,7 +445,7 @@ button:focus-visible, input:focus-visible, .knob:focus-visible {
   .strips { scroll-behavior: auto; }
 }
 
-@media (orientation: portrait) and (max-width: 380px) {
+@media (orientation: portrait) and (max-width: 440px) {
   .scene, .tool { width: 44px; height: 44px; }
   .scene-keys, .tools { gap: 6px; }
   .bar { column-gap: var(--u); }
@@ -817,3 +817,42 @@ html.v-meters .big { display: grid; grid-template-columns: repeat(8, minmax(0, 1
 .m-e b { display: block; font-family: Doto, ui-monospace, monospace; font-weight: 900; font-size: 13px; color: var(--ink); }
 .m-e div { font-size: 13px; color: var(--ink-2); line-height: 1.35; margin-top: 2px; }
 .m-copy { width: 100%; height: 140px; font-size: 11px; }
+
+/* ---------- v0.59: metronome options, screen lock, channel lock, presets ---------- */
+.metro { max-height: calc(100vh - var(--u) * 16); max-height: calc(100dvh - var(--u) * 16); overflow-y: auto; }
+.metro-opts { display: grid; row-gap: var(--u); }
+.metro-opt { display: grid; grid-template-columns: 64px 1fr auto; align-items: center; gap: var(--u); }
+.metro-opt .metro-unit { padding: 0; }
+.metro-keys { display: flex; gap: 6px; grid-column: 2 / -1; }
+.metro-keys .key { flex: 1; width: auto; height: 34px; border-radius: 9px; font-size: 12px; font-family: Doto, ui-monospace, monospace; font-weight: 900; }
+.metro-keys .key::before { display: none; }
+.metro-slider.small { height: 34px; }
+.lockscr { position: fixed; inset: 0; z-index: 60; display: grid; place-content: center; justify-items: center; gap: calc(var(--u) * 2);
+  background: rgba(0,0,0,.35); touch-action: none; -webkit-user-select: none; user-select: none; }
+.lockscr[hidden] { display: none; }
+.lock-key { position: relative; width: 96px; height: 96px; border-radius: 50%; border: none; background: var(--key); color: var(--ink);
+  box-shadow: 0 6px 0 var(--key-edge), 0 10px 20px var(--key-drop); display: grid; place-items: center; touch-action: none; }
+.lock-key svg { width: 40px; height: 40px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.lock-ring { position: absolute; inset: -6px; border-radius: 50%; background: conic-gradient(var(--accent) calc(var(--p, 0) * 360deg), transparent 0);
+  -webkit-mask: radial-gradient(circle, transparent 52px, #000 53px); mask: radial-gradient(circle, transparent 52px, #000 53px); }
+.lock-text { font-family: Doto, ui-monospace, monospace; font-weight: 900; font-size: 14px; color: #fff; text-align: center; max-width: 260px; text-shadow: 0 1px 3px #000; }
+#lock[aria-pressed="true"] { color: var(--accent); }
+.s-lock { display: none; width: 14px; height: 14px; margin-left: 4px; color: var(--accent); flex: none; }
+.s-lock svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.strip.locked .s-lock { display: inline-block; }
+.strip.locked .s-fader, .strip.locked .s-knob, .strip.locked .s-pan, .strip.locked .s-keys { opacity: .55; }
+.preset-row { align-items: center; padding: 4px 0; }
+.preset-row .chan-label { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.preset-row .cfg-keys { flex: 0 0 auto; }
+.preset-sum { display: block; font-size: 11px; font-weight: 400; color: var(--ink-3); font-family: Inter Tight, system-ui, sans-serif; overflow: hidden; text-overflow: ellipsis; }
+.preset-parts { display: flex; gap: 6px; flex-wrap: wrap; }
+.preset-io { display: flex; gap: 6px; flex-wrap: wrap; }
+.preset-paste { width: 100%; min-height: 120px; font: 12px ui-monospace, monospace; border-radius: 8px; padding: 8px; box-sizing: border-box; background: var(--screen); color: var(--screen-ink); border: 1px solid var(--ring-2); }
+@media (orientation: portrait) and (max-width: 440px) {
+  .scene { width: 36px; height: 40px; }
+  .tool { width: 40px; height: 40px; }
+  .scene-keys, .tools { gap: 4px; }
+}
+@media (orientation: portrait) and (max-width: 370px) {
+  #theme { display: none; }     /* theme is also on the app settings page */
+}

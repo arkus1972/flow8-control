@@ -217,6 +217,32 @@ public class FlowBlePlugin extends Plugin {
         call.resolve();
     }
 
+    // send text (a preset backup) to another app: Drive, e-mail, a messenger, Files
+    @PluginMethod
+    public void share(PluginCall call) {
+        try {
+            android.content.Intent it = new android.content.Intent(android.content.Intent.ACTION_SEND);
+            it.setType("text/plain");
+            it.putExtra(android.content.Intent.EXTRA_SUBJECT, call.getString("title", "FLOW 8"));
+            it.putExtra(android.content.Intent.EXTRA_TEXT, call.getString("text", ""));
+            android.content.Intent ch = android.content.Intent.createChooser(it, call.getString("title", "FLOW 8"));
+            ch.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(ch);
+            call.resolve();
+        } catch (Exception e) { call.reject("Nie mogę udostępnić"); }
+    }
+
+    // keep the screen on (metronome running, screen lock in the app), so Android does not pause the app
+    @PluginMethod
+    public void keepAwake(PluginCall call) {
+        final boolean on = Boolean.TRUE.equals(call.getBoolean("on", false));
+        if (getActivity() != null) getActivity().runOnUiThread(() -> {
+            if (on) getActivity().getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            else getActivity().getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        });
+        call.resolve();
+    }
+
     // open a link (the newest APK) in the phone's browser, which downloads it and offers to install
     @PluginMethod
     public void openUrl(PluginCall call) {

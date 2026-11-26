@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.58'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.59'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -647,7 +647,9 @@
       const name = el('button', 's-name', { type: 'button', title: 'Przytrzymaj, aby zmienić nazwę' });
       name.addEventListener('dblclick', () => rename(i));
       onHold(name, () => rename(i));
-      head.append(num, name);
+      const lock = el('span', 's-lock', { 'aria-label': 'zablokowany' });
+      lock.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
+      head.append(num, name, lock);
 
       const knobWrap = el('div', 's-knob' + (c.gain ? '' : ' none'));
       const knob = el('div', 'knob', { role: 'slider', tabindex: c.gain ? '0' : '-1', 'aria-valuemin': '0', 'aria-valuemax': '127' });
@@ -658,10 +660,10 @@
       const keys = el('div', 's-keys');
       const mute = el('button', 'key mute' + (c.master ? ' none' : ''), { type: 'button', 'aria-pressed': 'false' });
       mute.innerHTML = c.master ? '' : MUTE_ICON;
-      mute.addEventListener('click', () => { S.mutes[i] = !S.mutes[i]; sendMute(i); select(i); render(); save(); });
+      mute.addEventListener('click', () => { if (locked(i)) return; S.mutes[i] = !S.mutes[i]; sendMute(i); select(i); render(); save(); });
       const solo = el('button', 'key solo' + (c.master ? ' none' : ''), { type: 'button', 'aria-pressed': 'false' });
       solo.textContent = 'S';
-      solo.addEventListener('click', () => { S.solos[i] = !S.solos[i]; sendSolo(i); select(i); render(); save(); });
+      solo.addEventListener('click', () => { if (locked(i)) return; S.solos[i] = !S.solos[i]; sendSolo(i); select(i); render(); save(); });
       if (c.master) {
         // master strip: tap tempo instead of mute/solo (FX2 delays follow it)
         const tap = el('button', 'key tap', { type: 'button', 'aria-label': 'Tap tempo efektu' });
@@ -684,7 +686,7 @@
       let keyAt = 0;
       fader.addEventListener('keydown', () => { keyAt = performance.now(); });
       fader.addEventListener('input', () => {
-        if (performance.now() - keyAt > 600) { fader.value = Math.round(S.levels[S.bus][i]); return; }
+        if (performance.now() - keyAt > 600 || lk(i)) { fader.value = Math.round(S.levels[S.bus][i]); return; }
         S.levels[S.bus][i] = +fader.value; sendLevel(i); select(i); render(); save();
       });
       // own drag handling: Android Chrome does not drag vertical native ranges reliably
@@ -704,7 +706,7 @@
         drag = { id: e.pointerId, travel: travel * drag_res('resF'), y0: e.clientY, v0: S.levels[S.bus][i] }; det.start(drag.v0);
         // Only the cap moves the fader (FLOW Mix never jumps to the touched spot either):
         // a finger brushing the track must not change the mix.
-        if (Math.abs(e.clientY - thumbY) > th / 2 + 10 * K) drag = null;
+        if (Math.abs(e.clientY - thumbY) > th / 2 + 10 * K || lk(i)) drag = null;
       });
       fader.addEventListener('pointermove', e => {
         if (!drag || e.pointerId !== drag.id) return;
@@ -731,12 +733,12 @@
         hx = e.clientX; hy = e.clientY; unhold();
         hold = setTimeout(() => { hold = 0; drag = null; if (navigator.vibrate) navigator.vibrate(15); if (CHANNELS[i].master) { if (S.bus < 3) openEq(eqOutput(S.bus)); else openMasterColor(i); } else openChan(i); }, 550);
       });
-      faderWrap.addEventListener('pointermove', e => { if (hold && Math.hypot(e.clientX - hx, e.clientY - hy) > 8) unhold(); });
+      faderWrap.addEventListener('pointermove', e => { if (hold && Math.hypot(e.clientX - hx, e.clientY - hy) > 8) { unhold(); locked(i); } });
       ['pointerup', 'pointercancel', 'pointerleave'].forEach(t => faderWrap.addEventListener(t, unhold));
 
       const val = el('div', 's-val');
-      val.addEventListener('click', () => { select(i); askLevel(i); });
-      kl.addEventListener('click', () => { select(i); askGain(i); });
+      val.addEventListener('click', () => { select(i); if (!locked(i)) askLevel(i); });
+      kl.addEventListener('click', () => { select(i); if (!locked(i)) askGain(i); });
 
       strip.append(head, knobWrap, keys, pan, faderWrap, val);
       strips.appendChild(strip);
@@ -793,10 +795,11 @@
     });
     $('#open-setup').addEventListener('click', () => { closeMenu(); openSetup(); });
     $('#open-scenes').addEventListener('click', () => { closeMenu(); openScenes(); });
-    $('#sel-level').addEventListener('click', () => askLevel(S.sel));
-    $('#sel-gain').addEventListener('click', () => CHANNELS[S.sel].gain ? askGain(S.sel) : askPan(S.sel));
+    $('#sel-level').addEventListener('click', () => { if (!locked(S.sel)) askLevel(S.sel); });
+    $('#sel-gain').addEventListener('click', () => { if (!locked(S.sel)) CHANNELS[S.sel].gain ? askGain(S.sel) : askPan(S.sel); });
     $('#open-app').addEventListener('click', () => { closeMenu(); openApp(); });
     $('#open-measure').addEventListener('click', () => { closeMenu(); openMeasure(); });
+    $('#open-presets').addEventListener('click', () => { closeMenu(); openPresets(); });
     onHold($('#sel-name'), () => { if (!CHANNELS[S.sel].master) rename(S.sel); });
     $('#view').addEventListener('click', () => setView(VIEWS[(VIEWS.indexOf(S.view || '') + 1) % VIEWS.length]));
     $('#theme').addEventListener('click', () => { S.theme = S.theme === 'dark' ? 'light' : 'dark'; render(); save(); });
@@ -880,13 +883,13 @@
   function bindKnob(knob, i) {
     let startY = 0, startV = 0, active = false; const det = detent('detK', () => GAIN_ZERO);
     knob.addEventListener('pointerdown', e => {
-      knob.setPointerCapture(e.pointerId); active = true; startY = e.clientY; startV = S.gains[i]; det.start(startV); select(i);
+      knob.setPointerCapture(e.pointerId); active = !lk(i); startY = e.clientY; startV = S.gains[i]; det.start(startV); select(i);
       // holding the knob still opens the channel page, like holding the fader
       hx = e.clientX; hy = e.clientY; clearTimeout(hold);
       hold = setTimeout(() => { hold = 0; active = false; bump(true); openChan(i); }, 550);
     });
     let hold = 0, hx = 0, hy = 0;
-    knob.addEventListener('pointermove', e => { if (hold && Math.hypot(e.clientX - hx, e.clientY - hy) > 8) { clearTimeout(hold); hold = 0; } });
+    knob.addEventListener('pointermove', e => { if (hold && Math.hypot(e.clientX - hx, e.clientY - hy) > 8) { clearTimeout(hold); hold = 0; locked(i); } });
     ['pointerup', 'pointercancel'].forEach(k => knob.addEventListener(k, () => { clearTimeout(hold); hold = 0; }));
     knob.addEventListener('pointermove', e => {
       if (!active) return;
@@ -896,18 +899,19 @@
     const end = () => { active = false; };
     knob.addEventListener('pointerup', end);
     knob.addEventListener('pointercancel', end);
-    knob.addEventListener('wheel', e => { e.preventDefault(); setGain(i, S.gains[i] - Math.sign(e.deltaY) * 1.6); }, { passive: false });
+    knob.addEventListener('wheel', e => { e.preventDefault(); if (lk(i)) return; setGain(i, S.gains[i] - Math.sign(e.deltaY) * 1.6); }, { passive: false });
     knob.addEventListener('keydown', e => {
       const d = { ArrowUp: 1.6, ArrowRight: 1.6, ArrowDown: -1.6, ArrowLeft: -1.6, PageUp: 8, PageDown: -8 }[e.key];
-      if (d) { e.preventDefault(); setGain(i, S.gains[i] + d); }
+      if (d && !lk(i)) { e.preventDefault(); setGain(i, S.gains[i] + d); }
     });
   }
   // pan: drag sideways, double tap = centre
   function bindPan(pan, i) {
     let active = false, startX = 0, startV = 0, lastTap = 0;
     pan.lastChild.addEventListener('pointerdown', e => { e.stopPropagation(); });
-    pan.lastChild.addEventListener('click', e => { e.stopPropagation(); select(i); askPan(i); });
+    pan.lastChild.addEventListener('click', e => { e.stopPropagation(); select(i); if (!locked(i)) askPan(i); });
     pan.addEventListener('pointerdown', e => {
+      if (locked(i)) return;
       const t = performance.now();
       if (t - lastTap < 320) { setPan(i, 0); lastTap = 0; return; }
       lastTap = t; active = true; startX = e.clientX; startV = S.pans[i]; pan.setPointerCapture(e.pointerId); select(i);
@@ -922,6 +926,7 @@
     pan.addEventListener('pointercancel', end);
     pan.addEventListener('keydown', e => {
       const d = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1, PageUp: 10, PageDown: -10 }[e.key];
+      if (lk(i)) return;
       if (d) { e.preventDefault(); setPan(i, S.pans[i] + d); } else if (e.key === 'Home') setPan(i, 0);
     });
   }
@@ -1071,6 +1076,11 @@
     };
     if (CHANNELS[i].ble < 2) toggle('48 V', 'p48', 0x15, 'Włączyć zasilanie phantom 48 V na kanale ' + CHANNELS[i].num + '? Ścisz najpierw kanał.');
     if (CHANNELS[i].ble < 4) toggle('odwróć fazę', 'phase', 0x10);
+    const lb = el('button', 'chan-switch', { type: 'button', 'aria-pressed': 'false' }); lb.textContent = 'blokada';
+    lb.addEventListener('click', () => { setLock(i, !lk(i)); toast(lk(i) ? 'Kanał zablokowany: suwak, gain, pan, mute i solo nie reagują.' : 'Kanał odblokowany'); });
+    chanRows.push(() => lb.setAttribute('aria-pressed', lk(i) ? 'true' : 'false')); sw.append(lb);
+    const pb = el('button', 'chan-switch', { type: 'button' }); pb.textContent = 'presety';
+    pb.addEventListener('click', () => openPresets(i)); sw.append(pb);
     body.append(sw);
     colorGroup(body, 'kolor suwaka', 'colF', i, chanRows);
     if (CHANNELS[i].gain) colorGroup(body, 'kolor gałki', 'colK', i, chanRows);
@@ -1114,7 +1124,9 @@
   // ----- App settings: things that belong to this app, not to the mixer -----
   function openApp() {
     const body = subPage('ustawienia', 'aplikacja');
-    let g = grp(body, 'dźwięki');
+    let g = grp(body, 'wygląd');
+    choice(g, 'motyw', () => S.theme, v => { S.theme = v; render(); }, [['jasny', 'light'], ['ciemny', 'dark']]);
+    g = grp(body, 'dźwięki');
     const snd = (label, k, play) => g.append(mkRow(label, {
       get: () => vol(k) / 2,
       set: p => { const v = Math.round(p * 40) / 20; if (v === vol(k)) return; S[k] = v; play(); },
@@ -1795,7 +1807,7 @@
         const o = { bar, val, name, mark, peak: 0, peakAt: 0, dragAt: 0 };
         // finger on a column: pull up for louder, down for quieter (relative, so touching never jumps)
         let a = false, y0 = 0, v0 = 0; const det = detent('detF', zeroPos);
-        col.addEventListener('pointerdown', e => { a = true; y0 = e.clientY; v0 = S.levels[S.bus][i]; det.start(v0); col.setPointerCapture(e.pointerId); select(i); o.dragAt = performance.now(); bigRender(); });
+        col.addEventListener('pointerdown', e => { if (locked(i)) { select(i); return; } a = true; y0 = e.clientY; v0 = S.levels[S.bus][i]; det.start(v0); col.setPointerCapture(e.pointerId); select(i); o.dragAt = performance.now(); bigRender(); });
         col.addEventListener('pointermove', e => {
           if (!a) return;
           const hh = Math.max(wrap.getBoundingClientRect().height, 60) * drag_res('resF');
@@ -1870,6 +1882,7 @@
       r.col.setAttribute('aria-selected', sel ? 'true' : 'false');
 
       r.strip.classList.toggle('sel', sel);
+      r.strip.classList.toggle('locked', lk(i));
       r.name.textContent = c.master ? bus.short : S.names[i];
       r.knob.style.setProperty('--a', (-135 + S.gains[i] / 127 * 270) + 'deg');
       r.kl.textContent = 'gain ' + gainDb(S.gains[i]).replace(/,0$/, '') + ' dB';
@@ -1907,6 +1920,180 @@
     [...buses.querySelectorAll('button')].forEach((b, bi) => b.setAttribute('aria-checked', bi === S.bus ? 'true' : 'false'));
   }
 
+  // ---------- Locks ----------
+  // a locked channel ignores the fader, gain knob, pan, mute and solo on the main screens (the channel page still works);
+  // the screen lock covers everything until the padlock is held for a second (phone in a pocket)
+  const lk = i => !!(S.locks && S.locks[i]);
+  let lockToastAt = 0;
+  function locked(i) {
+    if (!lk(i)) return false;
+    const t = performance.now();
+    if (t - lockToastAt > 1500) { lockToastAt = t; toast('Kanał ' + S.names[i] + ' jest zablokowany. Odblokujesz go na stronie kanału.'); }
+    return true;
+  }
+  function setLock(i, on) { if (!Array.isArray(S.locks)) S.locks = CHANNELS.map(() => false); S.locks[i] = on; render(); chanRender(); save(); }
+  let screenLocked = false;
+  function awake() { try { if (NATIVE && NATIVE.keepAwake) NATIVE.keepAwake({ on: !!(M.running || screenLocked) }).catch(() => {}); } catch (e) {} }
+  function lockScreen(on) {
+    screenLocked = on;
+    $('#lockscr').hidden = !on;
+    $('#lock').setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (on) { $('#conn-menu').hidden = true; $('#metro').hidden = true; $('#metro-open').setAttribute('aria-expanded', 'false'); bump(true); }
+    awake();
+  }
+  function lockBuild() {
+    $('#lock').addEventListener('click', () => lockScreen(true));
+    const scr = $('#lockscr'), key = $('#unlock'), ring = $('#lock-ring');
+    let t0 = 0, raf = 0;
+    const stop = () => { t0 = 0; cancelAnimationFrame(raf); ring.style.setProperty('--p', 0); };
+    const step = () => {
+      if (!t0) return;
+      const p = Math.min(1, (performance.now() - t0) / 1000);
+      ring.style.setProperty('--p', p);
+      if (p >= 1) { stop(); lockScreen(false); toast('Odblokowane'); return; }
+      raf = requestAnimationFrame(step);
+    };
+    ['pointerdown', 'pointermove', 'touchstart', 'touchmove', 'click', 'contextmenu', 'wheel'].forEach(t => scr.addEventListener(t, e => { if (e.cancelable) e.preventDefault(); e.stopPropagation(); }, { passive: false }));
+    key.addEventListener('pointerdown', e => { t0 = performance.now(); key.setPointerCapture(e.pointerId); raf = requestAnimationFrame(step); });
+    ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(t => key.addEventListener(t, stop));
+  }
+
+  // ---------- Channel presets: low cut, EQ, compressor ----------
+  const Q0 = [0, 6, 6, 0];
+  // starting points; low cut values as in FLOW Mix's own input presets, EQ and compressor are a gentle first guess
+  const BUILTIN = [
+    { name: 'wokal (mikrofon dynamiczny)', hpf: 120, eq: [-2, -2, 2, 2], eqF: [100, 400, 3000, 12000], comp: 30 },
+    { name: 'wokal (pojemnościowy)', hpf: 120, eq: [-1, -2, 1, 2], eqF: [100, 300, 3000, 12000], comp: 25 },
+    { name: 'gitara akustyczna', hpf: 150, eq: [-2, -3, 2, 2], eqF: [100, 250, 3000, 10000], comp: 20 },
+    { name: 'gitara elektryczna', hpf: 120, eq: [0, -2, 2, -2], eqF: [100, 400, 2500, 8000], comp: 10 },
+    { name: 'gitara basowa', hpf: 40, eq: [2, -3, 2, -2], eqF: [80, 300, 1000, 6000], comp: 30 },
+    { name: 'stopa', hpf: 40, eq: [3, -4, 3, 0], eqF: [60, 350, 3000, 12000], comp: 20 },
+    { name: 'werbel', hpf: 180, eq: [1, -2, 2, 1], eqF: [200, 500, 4000, 10000], comp: 15 },
+    { name: 'klawisze', hpf: 20, eq: [0, 0, 0, 0], eqF: [100, 500, 2000, 12000], comp: 0 },
+    { name: 'płasko (wszystko na zero)', hpf: 20, eq: [0, 0, 0, 0], eqF: [100, 500, 2000, 12000], comp: 0 }
+  ];
+  const within = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  // anything read from a file or the clipboard is checked field by field
+  function presetClean(p) {
+    if (!p || typeof p !== 'object' || typeof p.name !== 'string' || !p.name.trim()) return null;
+    const n4 = (a, f) => Array.isArray(a) && a.length === 4 && a.every(x => typeof x === 'number' && isFinite(x)) ? a.map(f) : null;
+    const eq = n4(p.eq, g => Math.round(within(g, -15, 15) * 2) / 2);
+    const o = { name: p.name.trim().slice(0, 40) };
+    if (typeof p.hpf === 'number' && isFinite(p.hpf)) o.hpf = Math.round(within(p.hpf, 20, 600));
+    if (eq) { o.eq = eq; o.eqF = n4(p.eqF, f => Math.round(within(f, 20, 20000))) || [100, 500, 2000, 12000]; o.eqQ = n4(p.eqQ, q => Math.round(within(q, 0, 255))) || Q0.slice(); }
+    if (typeof p.comp === 'number' && isFinite(p.comp)) o.comp = Math.round(within(p.comp, 0, 100));
+    return o.hpf === undefined && !o.eq && o.comp === undefined ? null : o;
+  }
+  const presetOf = (i, name) => ({ name, hpf: S.hpf[i], eq: S.eq[i].slice(), eqF: S.eqF[i].slice(), eqQ: S.eqQ[i].slice(), comp: S.comp[i] });
+  const parts = () => Object.assign({ hpf: true, eq: true, comp: true }, S.presetParts || {});
+  function presetApply(i, p) {
+    const w = parts();
+    if (w.hpf && p.hpf !== undefined) { S.hpf[i] = p.hpf; bleHpf(i); }
+    if (w.eq && p.eq) for (let b = 0; b < 4; b++) { S.eq[i][b] = p.eq[b]; S.eqF[i][b] = p.eqF[b]; S.eqQ[i][b] = (p.eqQ || Q0)[b]; bleEq(i, b); }
+    if (w.comp && p.comp !== undefined) { S.comp[i] = p.comp; bleComp(i); }
+    render(); chanRender(); save();
+    toast('„' + p.name + '” na kanale ' + S.names[i] + (B.ready ? '' : ' (wyślę po połączeniu: menu, Wyślij wszystko)'));
+  }
+  const presetSum = p => [p.hpf !== undefined ? 'filtr ' + (p.hpf <= 20 ? 'wył.' : p.hpf + ' Hz') : '',
+    p.eq ? 'EQ ' + p.eq.map(g => fmt(g).replace(',0', '')).join(' ') : '', p.comp !== undefined ? 'komp. ' + p.comp + '%' : ''].filter(Boolean).join(' · ');
+  const userPresets = () => { if (!Array.isArray(S.presets)) S.presets = []; return S.presets; };
+  function presetExport() {
+    return JSON.stringify({ flow8: 'presets', v: 1, app: APP_VERSION, date: new Date().toISOString().slice(0, 10), presets: userPresets() }, null, 1);
+  }
+  function presetImport(text) {
+    let d; try { d = JSON.parse(text); } catch (e) { toast('To nie jest plik z presetami.'); return; }
+    const list = (Array.isArray(d) ? d : d && d.presets) || [];
+    let n = 0;
+    list.forEach(x => {
+      const p = presetClean(x); if (!p) return;
+      const all = userPresets(), k = all.findIndex(q => q.name === p.name);
+      if (k >= 0) all[k] = p; else all.push(p);
+      n++;
+    });
+    save(); toast(n ? 'Wczytano presety: ' + n : 'Nie znalazłem presetów w tym pliku.');
+  }
+  function openPresets(i) {
+    let target = i !== undefined && !CHANNELS[i].master ? i : CHANNELS[S.sel].master ? 0 : S.sel;
+    const body = subPage('presety', 'kanały');
+    let g = grp(body, 'kanał');
+    const chips = el('div', 'cfg-keys'); chips.style.justifyContent = 'flex-start';
+    CHANNELS.forEach((c, k) => {
+      if (c.master) return;
+      const b = el('button', 'chan-switch small', { type: 'button', 'aria-pressed': 'false' }); b.textContent = c.num;
+      b.addEventListener('click', () => { target = k; chanRender(); });
+      subRows.push(() => b.setAttribute('aria-pressed', k === target ? 'true' : 'false'));
+      chips.append(b);
+    });
+    const now = el('div', 'cfg-note');
+    subRows.push(() => { now.textContent = S.names[target] + ': ' + presetSum(presetOf(target, '')); });
+    g.append(chips, now);
+    g = grp(body, 'wczytuj');
+    const pk = el('div', 'cfg-keys'); pk.style.justifyContent = 'flex-start';
+    [['filtr', 'hpf'], ['korektor', 'eq'], ['kompresor', 'comp']].forEach(([t, k]) => {
+      const b = el('button', 'chan-switch small', { type: 'button', 'aria-pressed': 'false' }); b.textContent = t;
+      b.addEventListener('click', () => { const w = parts(); w[k] = !w[k]; S.presetParts = w; chanRender(); save(); });
+      subRows.push(() => b.setAttribute('aria-pressed', parts()[k] ? 'true' : 'false'));
+      pk.append(b);
+    });
+    g.append(pk);
+    const mine = grp(body, 'moje presety');
+    const listBox = el('div'); mine.append(listBox);
+    const add = el('button', 'chan-switch', { type: 'button' }); add.textContent = 'zapisz ustawienia kanału jako nowy preset';
+    add.addEventListener('click', () => {
+      const t = (prompt('Nazwa presetu', S.names[target]) || '').trim().slice(0, 40); if (!t) return;
+      const all = userPresets(), k = all.findIndex(q => q.name === t);
+      if (k >= 0 && !confirm('Preset „' + t + '” już jest. Nadpisać?')) return;
+      if (k >= 0) all[k] = presetOf(target, t); else all.push(presetOf(target, t));
+      save(); list(); toast('Zapisano preset „' + t + '”');
+    });
+    mine.append(add);
+    const row = (box, p, keys) => {
+      const r = el('div', 'cfg-row preset-row'), l = el('span', 'chan-label'), k = el('div', 'cfg-keys');
+      l.textContent = p.name; const sm = el('span', 'preset-sum'); sm.textContent = presetSum(p); l.append(sm);
+      keys.forEach(([t, f]) => { const b = el('button', 'chan-switch small', { type: 'button' }); b.textContent = t; b.addEventListener('click', f); k.append(b); });
+      r.append(l, k); box.append(r); return l;
+    };
+    function list() {
+      listBox.textContent = '';
+      const all = userPresets();
+      if (!all.length) { const n = el('div', 'cfg-note'); n.textContent = 'Jeszcze nic. Ustaw kanał i zapisz go jako preset.'; listBox.append(n); }
+      all.forEach((p, k) => {
+        const l = row(listBox, p, [
+          ['wczytaj', () => presetApply(target, p)],
+          ['nadpisz', () => { if (confirm('Zapisać w „' + p.name + '” obecne ustawienia kanału ' + S.names[target] + '?')) { all[k] = presetOf(target, p.name); save(); list(); } }],
+          ['usuń', () => { if (confirm('Usunąć preset „' + p.name + '”?')) { all.splice(k, 1); save(); list(); } }]
+        ]);
+        onHold(l, () => { const t = (prompt('Nowa nazwa presetu', p.name) || '').trim().slice(0, 40); if (t) { p.name = t; save(); list(); } });
+      });
+    }
+    list();
+    const n1 = el('div', 'cfg-note'); n1.textContent = 'Przytrzymaj nazwę presetu, żeby ją zmienić.'; mine.append(n1);
+    g = grp(body, 'gotowe na początek');
+    BUILTIN.forEach(p => row(g, p, [['wczytaj', () => presetApply(target, p)], ['do moich', () => { const t = (prompt('Nazwa w moich presetach', p.name) || '').trim().slice(0, 40); if (!t) return; const all = userPresets(), k = all.findIndex(q => q.name === t); if (k >= 0 && !confirm('Preset „' + t + '” już jest. Nadpisać?')) return; const c = Object.assign(presetClean(p), { name: t }); if (k >= 0) all[k] = c; else all.push(c); save(); list(); }]]));
+    g = grp(body, 'kopia zapasowa');
+    const io = el('div', 'preset-io');
+    const key = (t, f) => { const b = el('button', 'chan-switch small', { type: 'button' }); b.textContent = t; b.addEventListener('click', f); io.append(b); };
+    key(NATIVE ? 'wyślij / zapisz' : 'pobierz plik', () => {
+      const t = presetExport(), name = 'flow8-presety-' + new Date().toISOString().slice(0, 10) + '.json';
+      if (NATIVE && NATIVE.share) { NATIVE.share({ title: name, text: t }).catch(() => toast('Nie udało się. Użyj „kopiuj”.')); return; }
+      const a = el('a', '', { href: URL.createObjectURL(new Blob([t], { type: 'application/json' })), download: name }); document.body.append(a); a.click(); a.remove();
+    });
+    key('kopiuj tekst', () => { const t = presetExport(); (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => toast('Presety skopiowane do schowka'), () => toast('Schowek niedostępny')); });
+    const file = el('input', '', { type: 'file', accept: '.json,application/json,text/plain', hidden: '' });
+    file.addEventListener('change', () => { const f = file.files && file.files[0]; if (!f) return; f.text().then(t => { presetImport(t); list(); file.value = ''; }); });
+    key('wczytaj z pliku', () => file.click());
+    key('wklej', () => {
+      if (body.querySelector('.preset-paste')) return;
+      const ta = el('textarea', 'preset-paste', { placeholder: 'Wklej tutaj tekst kopii presetów' });
+      const ok = el('button', 'chan-switch', { type: 'button' }); ok.textContent = 'dodaj z wklejonego tekstu';
+      ok.addEventListener('click', () => { presetImport(ta.value); list(); ta.remove(); ok.remove(); });
+      g.append(ta, ok); ta.focus();
+    });
+    g.append(io, file);
+    const n2 = el('div', 'cfg-note'); n2.textContent = 'Kopia to plik tekstowy z Twoimi presetami. Wyślij go sobie (Dysk, e-mail, komunikator). Wczytanie dodaje presety, a te o tej samej nazwie zastępuje.'; g.append(n2);
+    chanRender();
+  }
+
   // ---------- Metronome ----------
   // Click is generated on the phone (Web Audio). Pair the phone with FLOW 8 over Bluetooth
   // and the click arrives on the USB/BT channel, so it can go to the monitors only.
@@ -1931,6 +2118,7 @@
     $('#metro-play').addEventListener('click', () => (M.running ? stop() : start()));
     $('#metro-fx').checked = S.metroFx !== false;
     $('#metro-fx').addEventListener('change', e => { S.metroFx = e.target.checked; save(); });
+    metroOpts();
     metroRender();
   }
   function setBpm(v) {
@@ -1950,34 +2138,66 @@
   function start() {
     M.ctx = M.ctx || new (window.AudioContext || window.webkitAudioContext)();
     M.ctx.resume();
-    M.running = true; M.beat = 0; M.tapLeft = 4;
+    M.running = true; M.beat = 0; M.tapLeft = 4; awake();
     M.next = M.ctx.currentTime + 0.06;
     tick();
     metroRender();
   }
   function stop() {
-    M.running = false; clearTimeout(M.timer); metroRender();
+    M.running = false; clearTimeout(M.timer); metroRender(); awake();
     [...$('#beats').children].forEach(s => s.className = '');
     $('#beat-led').classList.remove('on');
   }
   function tick() {
     if (!M.running) return;
-    while (M.next < M.ctx.currentTime + 0.12) {
-      click(M.next, M.beat % M.beats === 0);
+    while (M.next < M.ctx.currentTime + 0.2) {
+      if (S.metroSnd !== 'mute') click(M.next, M.beat % M.beats === 0);
       const b = M.beat % M.beats, delay = Math.max(0, (M.next - M.ctx.currentTime) * 1000);
       setTimeout(() => onBeat(b), delay);
       M.next += 60 / M.bpm; M.beat++;
     }
     M.timer = setTimeout(tick, 25);
   }
+  // the click can go to one side only: with the phone cabled into two mixer inputs (L, R) it lands on one channel,
+  // which can then be sent to the monitors and kept off the sala
   function click(t, accent) {
+    const v = S.metroVol === undefined ? 1 : S.metroVol; if (v <= 0) return;
     const o = M.ctx.createOscillator(), g = M.ctx.createGain();
-    o.frequency.value = accent ? 1760 : 1175;
+    const wood = S.metroSnd === 'wood';
+    o.type = wood ? 'triangle' : 'sine';
+    o.frequency.value = wood ? (accent ? 1250 : 880) : (accent ? 1760 : 1175);
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(accent ? 0.9 : 0.55, t + 0.002);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
-    o.connect(g).connect(M.ctx.destination);
+    g.gain.exponentialRampToValueAtTime((accent ? 0.9 : 0.55) * v, t + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + (wood ? 0.03 : 0.05));
+    let node = o.connect(g);
+    if (S.metroSide && M.ctx.createStereoPanner) { const pn = M.ctx.createStereoPanner(); pn.pan.value = S.metroSide === 'L' ? -1 : 1; node = node.connect(pn); }
+    node.connect(M.ctx.destination);
     o.start(t); o.stop(t + 0.06);
+  }
+  function metroOpts() {
+    const box = $('#metro-opts');
+    const keys = (label, get, set, opts) => {
+      const r = el('div', 'metro-opt'), l = el('span', 'metro-unit'); l.textContent = label; r.append(l);
+      const k = el('div', 'metro-keys'); r.append(k);
+      opts.forEach(([t, v]) => {
+        const b = el('button', 'key small', { type: 'button', 'aria-pressed': 'false' }); b.textContent = t;
+        b.addEventListener('click', () => { set(v); save(); paint(); });
+        k.append(b); M.paints.push(() => b.setAttribute('aria-pressed', get() === v ? 'true' : 'false'));
+      });
+      box.append(r);
+    };
+    M.paints = [];
+    keys('wyjście', () => S.metroSide || '', v => { S.metroSide = v; }, [['L + P', ''], ['lewe', 'L'], ['prawe', 'R']]);
+    keys('dźwięk', () => S.metroSnd || 'beep', v => { S.metroSnd = v; }, [['beep', 'beep'], ['drewno', 'wood'], ['cisza', 'mute']]);
+    keys('wibracja', () => !!S.metroVib, v => { S.metroVib = v; }, [['tak', true], ['nie', false]]);
+    const r = el('div', 'metro-opt'), l = el('span', 'metro-unit'); l.textContent = 'głośność';
+    const sl = el('input', 'metro-slider small', { type: 'range', min: '0', max: '200', step: '5', 'aria-label': 'Głośność metronomu' });
+    sl.value = Math.round((S.metroVol === undefined ? 1 : S.metroVol) * 100);
+    const v = el('span', 'metro-unit'); const txt = () => { v.textContent = sl.value + '%'; };
+    sl.addEventListener('input', () => { S.metroVol = sl.value / 100; txt(); save(); }); txt();
+    r.append(l, sl, v); box.append(r);
+    const paint = () => M.paints.forEach(f => f());
+    paint();
   }
   // tap tempo for the effects: USB MIDI gets a tap note, Bluetooth gets the tempo itself (as FLOW Mix does)
   const fxTaps = [];
@@ -1997,6 +2217,7 @@
     [...spans].forEach((s, k) => s.className = k === b ? (k === 0 ? 'on accent' : 'on') : '');
     const led = $('#beat-led');
     led.classList.add('on'); setTimeout(() => led.classList.remove('on'), 90);
+    if (S.metroVib) try { if (NATIVE && NATIVE.buzz) NATIVE.buzz(b === 0 ? {} : { soft: true }).catch(() => {}); else if (navigator.vibrate) navigator.vibrate(b === 0 ? 30 : 12); } catch (e) {}
     if (M.tapLeft > 0 && S.metroFx !== false && M.bpm >= 50 && M.bpm <= 240) {
       if (B.ready) { if (S.tempo !== M.bpm) { S.tempo = M.bpm; bleTempo(); save(); } M.tapLeft = 0; }   // Bluetooth: send the tempo once
       else { send([0x90 + GLOBAL_CH - 1, 0, 100], true); M.tapLeft--; }
@@ -2017,6 +2238,7 @@
 
   build();
   metroBuild();
+  lockBuild();
   render();
   if (S.view) setView(S.view, true);
   requestAnimationFrame(() => scrollToSel(false));
