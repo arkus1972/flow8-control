@@ -212,6 +212,17 @@ public class FlowBlePlugin extends Plugin {
         call.resolve();
     }
 
+    // open a link (the newest APK) in the phone's browser, which downloads it and offers to install
+    @PluginMethod
+    public void openUrl(PluginCall call) {
+        try {
+            android.content.Intent it = new android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(call.getString("url")));
+            it.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(it);
+            call.resolve();
+        } catch (Exception e) { call.reject("Nie mogę otworzyć linku"); }
+    }
+
     @PluginMethod
     public void write(PluginCall call) {
         if (gatt == null || chr == null) { call.reject("Brak połączenia"); return; }

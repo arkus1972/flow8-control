@@ -780,3 +780,9 @@ html.v-meters .big { display: grid; grid-template-columns: repeat(8, minmax(0, 1
 .scene-row .chan-switch.small { padding: 0 8px; font-size: 11px; }
 .chan-switch:disabled { opacity: .35; }
 .sub .chan-body { overflow-y: auto; }
+
+.diag-update { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.diag-update span { flex: 1; font-size: 13px; }
+.diag-update .key.wide { flex: 0 0 auto; width: auto; padding: 0 14px; }
+.diag { grid-template-rows: auto auto 1fr auto; }
+.diag-update .key.wide.go { background: var(--accent); color: #fff; }

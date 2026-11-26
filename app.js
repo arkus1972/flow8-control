@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.48'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.49'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -654,7 +654,15 @@
 
       const faderWrap = el('div', 's-fader');
       const fader = el('input', 'fader', { type: 'range', min: '0', max: '127', step: '1' });
-      fader.addEventListener('input', () => { S.levels[S.bus][i] = +fader.value; sendLevel(i); select(i); render(); save(); });
+      // The browser's own slider handling may only act for the keyboard. A touch that slips past our handlers
+      // (Chrome does this for a quick touch right after another gesture, e.g. after turning the gain knob)
+      // would otherwise pull the fader to the finger, so anything else is put back at once.
+      let keyAt = 0;
+      fader.addEventListener('keydown', () => { keyAt = performance.now(); });
+      fader.addEventListener('input', () => {
+        if (performance.now() - keyAt > 600) { fader.value = Math.round(S.levels[S.bus][i]); return; }
+        S.levels[S.bus][i] = +fader.value; sendLevel(i); select(i); render(); save();
+      });
       // own drag handling: Android Chrome does not drag vertical native ranges reliably
       const setFader = v => {
         // over Bluetooth use the mixer's own 0-255 steps (half as coarse as 0-127), so the dB readout moves in 0.5 dB steps
@@ -683,11 +691,12 @@
       const endDrag = () => { drag = null; };
       fader.addEventListener('pointerup', endDrag);
       fader.addEventListener('pointercancel', endDrag);
+      fader.addEventListener('lostpointercapture', endDrag);
       const ticks = el('div', 'ticks', { 'aria-hidden': 'true' });
       // tick positions: +10, 0, -10, -30, -50, off (0 dB highlighted)
       [10, 0, -10, -30, -50, -70].forEach(db => {
         const t = el('span', db === 0 ? 'zero' : '');
-        t.style.setProperty('--p', ((db + 70) * 126 / 80 + 1) / 127);
+        t.style.setProperty('--p', { 10: 1, 0: 0.75, '-10': 0.5, '-30': 0.25, '-50': 0.125, '-70': 0 }[db]);   // the mixer's own fader law (0 dB at three quarters)
         ticks.appendChild(t);
       });
       faderWrap.append(fader, ticks);
@@ -1357,6 +1366,25 @@
     if (n) { S.names[i] = n; if (B.ready) bleLabel(i); render(); save(); }
   }
 
+  // ---------- Update: newest APK from the project's GitHub release ----------
+  const APK_URL = 'https://github.com/arkus1972/flow8-control/releases/download/android/flow8-control.apk';
+  function updateCheck() {
+    const info = document.getElementById('upd-info'); if (!info) return;
+    info.textContent = 'Sprawdzam najnowszą wersję…';
+    fetch('https://api.github.com/repos/arkus1972/flow8-control/releases/tags/android', { cache: 'no-store' }).then(r => r.json()).then(j => {
+      const m = /v(\d+\.\d+)/.exec(j.name || '');
+      if (!m) throw 0;
+      const newer = parseFloat(m[1]) > parseFloat(APP_VERSION);
+      info.textContent = newer ? 'Masz v' + APP_VERSION + ', jest nowsza: v' + m[1] : 'Masz najnowszą wersję (v' + APP_VERSION + ')';
+      document.getElementById('upd-go').classList.toggle('go', newer);
+    }).catch(() => { info.textContent = 'Masz v' + APP_VERSION + '. Nie udało się sprawdzić (brak internetu?)'; });
+  }
+  function updateNow() {
+    if (!NATIVE) { location.reload(); return; }                    // in the browser a reload is the update
+    toast('Pobieram nową wersję. Po pobraniu dotknij pliku i wybierz Zainstaluj.');
+    if (NATIVE.openUrl) NATIVE.openUrl({ url: APK_URL }).catch(() => { location.href = APK_URL; }); else location.href = APK_URL;
+  }
+
   // ---------- Diagnostics ----------
   // Tap the version label: a log of raw Bluetooth frames, a "probe" button that asks the mixer
   // for every channel's state, and "copy" so the log can be pasted into the chat.
@@ -1374,6 +1402,7 @@
     if (!d) {
       d = el('section', 'diag', { id: 'diag', 'aria-label': 'Diagnostyka' });
       d.innerHTML = '<div class="diag-head"><b>Diagnostyka v' + APP_VERSION + '</b></div>' +
+        '<div class="diag-update"><span id="upd-info">Sprawdzam najnowszą wersję…</span><button class="key wide" id="upd-go" type="button">Aktualizuj</button></div>' +
         '<textarea id="diag-log" readonly></textarea>' +
         '<div class="diag-keys"><button class="key wide" id="diag-probe" type="button">Badaj mikser</button>' +
         '<button class="key wide go" id="diag-copy" type="button">Kopiuj</button>' +
@@ -1382,9 +1411,11 @@
       $('#diag-close').addEventListener('click', () => { d.hidden = true; });
       $('#diag-probe').addEventListener('click', diagProbe);
       $('#diag-copy').addEventListener('click', diagCopy);
+      $('#upd-go').addEventListener('click', updateNow);
     }
     d.hidden = false;
     $('#diag-log').value = DIAG.lines.slice(-400).join('\n');
+    updateCheck();
   }
   function diagProbe() {
     if (!B.ready) { toast('Najpierw połącz się z mikserem.'); return; }
