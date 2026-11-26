@@ -794,3 +794,10 @@ html.v-meters .big { display: grid; grid-template-columns: repeat(8, minmax(0, 1
   .conn-menu, .conn-menu[id] { width: 440px; grid-template-columns: 1fr 1fr; max-height: calc(100vh - 60px); overflow-y: auto; }
   .conn-menu .conn-status { grid-column: 1 / -1; }
 }
+/* names are edited by holding a finger on them, so they must not start a text selection */
+.s-name, .chan-name, .readout-name { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+/* colour swatches on the channel page */
+.chan-colors { display: flex; flex-wrap: wrap; gap: 10px; padding: 4px 0 2px; }
+.chan-color { width: 44px; height: 30px; border-radius: 7px; border: 0; padding: 0; background: var(--cap); cursor: pointer;
+  box-shadow: 0 4px 8px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.4), inset 0 -2px 0 rgba(0,0,0,.18), inset 0 -15px 0 -13px var(--mark); }
+.chan-color[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 3px; }

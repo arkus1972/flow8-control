@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.54'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.55'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -18,6 +18,9 @@
     { name: 'telefon',  num: 'USB', midi: 7, ble: 6, gain: false, cap: '#2F5BEA', mark: '#FFFFFF', glyph: 'M10 4h10v22H10zM13 22h4' },
     { name: 'main',     num: 'OUT', midi: 0, gain: false, cap: '#1C1C1C', mark: '#E8501A', glyph: '', master: true }
   ];
+  // cap colours to choose from on the channel page: [cap, mark]
+  const PALETTE = [['#E8501A', '#FFFFFF'], ['#2F5BEA', '#FFFFFF'], ['#F4F4F1', '#1C1C1C'], ['#1C1C1C', '#FFFFFF'], ['#A3A39E', '#1C1C1C'],
+    ['#F2B807', '#1C1C1C'], ['#1FA36B', '#FFFFFF'], ['#D8345F', '#FFFFFF'], ['#8A4FE0', '#FFFFFF'], ['#22B8CF', '#1C1C1C']];
   const BUSES = [
     // dst = bus id on the Bluetooth link (MAIN 0x0f, MON1 0x0a, MON2 0x0b, FX1 0x0c, FX2 0x0d)
     { id: 'main', label: 'sala',      short: 'sala',  midi: 8,  sendCC: 7,  dst: 0x0f },
@@ -617,13 +620,13 @@
 
       // strip
       const strip = el('section', 'strip', { 'aria-label': 'Kanał ' + S.names[i] });
-      strip.style.setProperty('--cap', c.cap);
-      strip.style.setProperty('--mark', c.mark);
+      paint(strip, i);
 
       const head = el('div', 's-head');
       const num = el('span', 's-num'); num.textContent = c.num;
-      const name = el('button', 's-name', { type: 'button', title: 'Stuknij dwa razy, aby zmienić nazwę' });
+      const name = el('button', 's-name', { type: 'button', title: 'Przytrzymaj, aby zmienić nazwę' });
       name.addEventListener('dblclick', () => rename(i));
+      onHold(name, () => rename(i));
       head.append(num, name);
 
       const knobWrap = el('div', 's-knob' + (c.gain ? '' : ' none'));
@@ -678,7 +681,7 @@
         const r = fader.getBoundingClientRect(), th = (portrait() ? 56 : 34) * K;
         const travel = r.height - th, cur = +fader.value;
         const thumbY = r.bottom - th / 2 - cur / 127 * travel;
-        drag = { id: e.pointerId, travel, y0: e.clientY, v0: S.levels[S.bus][i] }; det.start(drag.v0);
+        drag = { id: e.pointerId, travel: travel * drag_res('resF'), y0: e.clientY, v0: S.levels[S.bus][i] }; det.start(drag.v0);
         // Only the cap moves the fader (FLOW Mix never jumps to the touched spot either):
         // a finger brushing the track must not change the mix.
         if (Math.abs(e.clientY - thumbY) > th / 2 + 10 * K) drag = null;
@@ -771,6 +774,7 @@
     $('#sel-level').addEventListener('click', () => askLevel(S.sel));
     $('#sel-gain').addEventListener('click', () => CHANNELS[S.sel].gain ? askGain(S.sel) : askPan(S.sel));
     $('#open-app').addEventListener('click', () => { closeMenu(); openApp(); });
+    onHold($('#sel-name'), () => { if (!CHANNELS[S.sel].master) rename(S.sel); });
     $('#view').addEventListener('click', () => setView(VIEWS[(VIEWS.indexOf(S.view || '') + 1) % VIEWS.length]));
     $('#theme').addEventListener('click', () => { S.theme = S.theme === 'dark' ? 'light' : 'dark'; render(); save(); });
 
@@ -793,14 +797,23 @@
     return true;
   }
 
+  // the channel's colour (fader cap and gain knob): the user's choice from PALETTE, else the built-in one
+  function capOf(i) { const p = S.colors && PALETTE[S.colors[i]]; return p || [CHANNELS[i].cap, CHANNELS[i].mark]; }
+  function paint(node, i) { const c = capOf(i); node.style.setProperty('--cap', c[0]); node.style.setProperty('--mark', c[1]); }
   function bindKnob(knob, i) {
     let startY = 0, startV = 0, active = false; const det = detent('detK', () => GAIN_ZERO);
     knob.addEventListener('pointerdown', e => {
       knob.setPointerCapture(e.pointerId); active = true; startY = e.clientY; startV = S.gains[i]; det.start(startV); select(i);
+      // holding the knob still opens the channel page, like holding the fader
+      hx = e.clientX; hy = e.clientY; clearTimeout(hold);
+      hold = setTimeout(() => { hold = 0; active = false; bump(true); openChan(i); }, 550);
     });
+    let hold = 0, hx = 0, hy = 0;
+    knob.addEventListener('pointermove', e => { if (hold && Math.hypot(e.clientX - hx, e.clientY - hy) > 8) { clearTimeout(hold); hold = 0; } });
+    ['pointerup', 'pointercancel'].forEach(k => knob.addEventListener(k, () => { clearTimeout(hold); hold = 0; }));
     knob.addEventListener('pointermove', e => {
       if (!active) return;
-      const scale = (portrait() ? 0.5 : 0.8) / K;
+      const scale = (portrait() ? 0.5 : 0.8) / K / drag_res('resK');
       setGain(i, det.map(startV + (startY - e.clientY) * scale, scale));
     });
     const end = () => { active = false; };
@@ -928,6 +941,7 @@
     back.addEventListener('click', closeChan);
     const num = el('span', 'chan-num'); num.textContent = CHANNELS[i].num;
     const name = el('span', 'chan-name'); name.textContent = S.names[i];
+    onHold(name, () => { rename(i); name.textContent = S.names[i]; });
     head.append(back, num, name);
     const body = el('div', 'chan-body');
     const group = (title, rows, icon, more) => {
@@ -980,10 +994,17 @@
     };
     if (CHANNELS[i].ble < 2) toggle('48 V', 'p48', 0x15, 'Włączyć zasilanie phantom 48 V na kanale ' + CHANNELS[i].num + '? Ścisz najpierw kanał.');
     if (CHANNELS[i].ble < 4) toggle('odwróć fazę', 'phase', 0x10);
-    const ren = el('button', 'chan-switch', { type: 'button' }); ren.textContent = 'zmień nazwę';
-    ren.addEventListener('click', () => { rename(i); name.textContent = S.names[i]; });
-    sw.append(ren);
     body.append(sw);
+    // colour of this channel's fader cap and gain knob
+    const cg = el('div', 'chan-group'), ct = el('div', 'chan-title'), cr = el('div', 'chan-colors'); ct.textContent = 'kolor suwaka i gałki'; cg.append(ct, cr);
+    PALETTE.forEach((pc, k) => {
+      const b = el('button', 'chan-color', { type: 'button', 'aria-label': 'Kolor ' + (k + 1), 'aria-pressed': 'false' });
+      b.style.setProperty('--cap', pc[0]); b.style.setProperty('--mark', pc[1]);
+      b.addEventListener('click', () => { S.colors = S.colors || []; S.colors[i] = k; paint(refs[i].strip, i); chanRender(); save(); });
+      chanRows.push(() => b.setAttribute('aria-pressed', capOf(i)[0] === pc[0] && capOf(i)[1] === pc[1] ? 'true' : 'false'));
+      cr.append(b);
+    });
+    body.append(cg);
     page.append(head, body);
     $('#device').append(page);
     chanRender();
@@ -1045,6 +1066,14 @@
     }, subRows));
     dt('suwak', 'detF'); dt('gałka gain', 'detK');
     const n = el('div', 'cfg-note'); n.textContent = 'Im dalej w prawo, tym mocniej 0 dB trzyma. Na końcu skali suwak staje na 0 dB i trzeba puścić palec, żeby pojechać dalej.'; g.append(n);
+    g = grp(body, 'opór przy przesuwaniu');
+    const rs = (label, k) => g.append(mkRow(label, {
+      get: () => +S[k] || 0, set: p => { S[k] = Math.round(p * 20) / 20; },
+      text: () => (+S[k] || 0) <= 0 ? 'brak' : Math.round(S[k] * 100) + '%',
+      ask: () => askNum('Opór: ' + label + ' (%)', String(Math.round((+S[k] || 0) * 100)), '0 = brak, 100 = najcięższy.', 0, 100, d => { S[k] = Math.round(d) / 100; })
+    }, subRows));
+    rs('suwak', 'resF'); rs('gałka gain', 'resK');
+    const n2 = el('div', 'cfg-note'); n2.textContent = 'Większy opór oznacza, że palec musi przejechać dłuższą drogę (do 4 razy), więc łatwiej ustawić dokładną wartość.'; g.append(n2);
     chanRender();
   }
   function openSetup() {
@@ -1385,6 +1414,8 @@
   // stays until the finger has moved a clear distance away from where it was caught (in either direction),
   // so stopping on 0 dB needs no precision. After the release the cap moves on without a jump.
   const zeroPos = () => fine() ? 191 * 127 / 255 : 111;            // the fader position that reads 0,0 dB
+  // resistance, set on the app settings page: 0 = the cap follows the finger, 1 = the finger has to travel four times as far
+  function drag_res(k) { return 1 + 3 * Math.max(0, Math.min(1, +S[k] || 0)); }
   const GAIN_ZERO = 20 * 127 / 80;                                 // the gain knob position of 0 dB
   // detent strength, set on the app settings page: 0 = none, 1 = a hard stop at 0 dB (lift the finger to go on), between = finger travel to break out
   if (S.detF === undefined) { S.detF = S.detent === false ? 0 : S.detent === 1 ? 0.15 : 0.5; }
@@ -1412,11 +1443,13 @@
     };
   }
   // fader sound: one very quiet, soft tick per 0.5 dB step, like a fine detent (the earlier hiss was too coarse)
-  let tickAt = 0, lastDb = '';
+  let tickAt = 0, lastDb = '', lastV = -1;
   function slide(v) {
-    const db = levelDb(v), was = lastDb; lastDb = db;
+    const db = levelDb(v), was = lastDb, wasV = lastV; lastDb = db; lastV = v;
+    // the ends buzz when the cap arrives there, even if the dB readout was already showing the end value (the last steps read the same)
+    if (wasV >= 0 && ((v >= 127 && wasV < 127) || (v <= 0 && wasV > 0))) bump(true);
     if (db === was) return;
-    if (was !== '' && (db === '0,0' || v >= 127 || v <= 0)) bump(db === '0,0');
+    if (was !== '' && db === '0,0') bump(true);
     if (!vol('sndF')) return;
     const now = performance.now(); if (now - tickAt < 28) return; tickAt = now;
     try {
@@ -1441,6 +1474,15 @@
     if (!portrait() || S.view === 'meters') return;
     const strips = $('#strips');
     strips.scrollTo({ left: S.sel * strips.clientWidth, behavior: smooth ? 'smooth' : 'auto' });
+  }
+  // holding a finger still on an element (used for names: hold to edit)
+  function onHold(node, fn) {
+    let t = 0, x = 0, y = 0;
+    const stop = () => { clearTimeout(t); t = 0; };
+    node.addEventListener('pointerdown', e => { x = e.clientX; y = e.clientY; stop(); t = setTimeout(() => { t = 0; bump(true); fn(); }, 550); });
+    node.addEventListener('pointermove', e => { if (t && Math.hypot(e.clientX - x, e.clientY - y) > 8) stop(); });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(k => node.addEventListener(k, stop));
+    node.addEventListener('contextmenu', e => e.preventDefault());
   }
   function rename(i) {
     const n = (prompt('Nazwa kanału', S.names[i]) || '').trim().slice(0, 12);
@@ -1547,7 +1589,7 @@
         col.addEventListener('pointerdown', e => { a = true; y0 = e.clientY; v0 = S.levels[S.bus][i]; det.start(v0); col.setPointerCapture(e.pointerId); select(i); o.dragAt = performance.now(); bigRender(); });
         col.addEventListener('pointermove', e => {
           if (!a) return;
-          const hh = Math.max(wrap.getBoundingClientRect().height, 60);
+          const hh = Math.max(wrap.getBoundingClientRect().height, 60) * drag_res('resF');
           const p = Math.max(0, Math.min(1, det.map(v0 + (y0 - e.clientY) / hh * 127, 127 / hh) / 127));
           const v = fine() ? Math.round(p * 255) * 127 / 255 : Math.round(p * 127);
           o.dragAt = performance.now();
