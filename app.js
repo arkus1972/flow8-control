@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.56'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.57'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -374,8 +374,22 @@
     bleHandle(cmd, p);
   }
   // meters for inputs 1-4 (0x40+), 5/6, 7/8, USB (0xC0+ = stereo) and MAIN, as FLOW Mix asks
-  function bleMeterRequest() { bleQueue('meters', 0x21, [8, 0x40, 0x41, 0x42, 0x43, 0xc4, 0xc5, 0xc6, 0xcf, 0, 0, 0, 0, 0, 0, 0]); }
-  setInterval(() => { if (B.ready && performance.now() - (B.meterAt || 0) > 3000) bleMeterRequest(); }, 3000);
+  // While the measuring page is open we also ask for the two monitor outputs (0x4a, 0x4b) in the spare slots of the frame.
+  // FLOW Mix only ever asks for 8 meters, so if the mixer stops answering, we fall back to its exact request.
+  function bleMeterRequest() {
+    const ext = MS.open && MS.ext !== false;
+    const ids = [0x40, 0x41, 0x42, 0x43, 0xc4, 0xc5, 0xc6, 0xcf].concat(ext ? [0x4a, 0x4b] : []);
+    const list = [ids.length].concat(ids); while (list.length < 16) list.push(0);
+    if (ext) MS.extAt = performance.now();
+    bleQueue('meters', 0x21, list);
+  }
+  setInterval(() => {
+    if (!B.ready) return;
+    const t = performance.now();
+    // the extended request got no answer: go back to the factory request for good
+    if (MS.extAt && MS.ext !== false && t - (B.meterAt || 0) > 2500 && t - MS.extAt > 2500 && (B.meterAt || 0) < MS.extAt) { MS.ext = false; MS.extAt = 0; bleMeterRequest(); return; }
+    if (t - (B.meterAt || 0) > 3000) bleMeterRequest();
+  }, 1000);
   function bleHandle(cmd, p) {
     const idx = id => CHANNELS.findIndex(c => c.ble === id);
     const now = performance.now();
@@ -472,6 +486,7 @@
         B.meters = [v[0], v[1], v[2], v[3], mx(4, 5), mx(6, 7), mx(8, 9), mx(10, 11)]; B.meterAt = now;
         B.meterN = (B.meterN || 0) + 1; B.meterLast = Array.from(p); B.meterMax = Array.from(p).map((x, k) => Math.max(x, (B.meterMax || [])[k] || 0));
         B.gr = p.length >= 17 ? p[15] << 8 | p[16] : 0;           // 2 bits per input channel (0-3), top 2 bits = outputs
+        measureFeed(p, now);
         if (chanOpen >= 0 || document.getElementById('sub')) chanRender();
         renderMeters(); break;
       }
@@ -482,6 +497,7 @@
   //  MAIN 0x0f / MON 0x0a,0x0b (52 B): [id][00][master][7f][3c][7 sends: ch1-4,5/6,7/8,USB][9 GEQ][18 B freqs][9 B][4 B]
   //  FX 0x0c,0x0d (17 B): [id][00][92][7f][x][3 B][7 sends][2 B]
   function bleMixerState(p) {
+    B.stateRaw = Array.from(p);
     let k = 0;
     const gains = [];
     const flags = [], pans = [], recs = [], labels = [], icons = [];
@@ -774,6 +790,7 @@
     $('#sel-level').addEventListener('click', () => askLevel(S.sel));
     $('#sel-gain').addEventListener('click', () => CHANNELS[S.sel].gain ? askGain(S.sel) : askPan(S.sel));
     $('#open-app').addEventListener('click', () => { closeMenu(); openApp(); });
+    $('#open-measure').addEventListener('click', () => { closeMenu(); openMeasure(); });
     onHold($('#sel-name'), () => { if (!CHANNELS[S.sel].master) rename(S.sel); });
     $('#view').addEventListener('click', () => setView(VIEWS[(VIEWS.indexOf(S.view || '') + 1) % VIEWS.length]));
     $('#theme').addEventListener('click', () => { S.theme = S.theme === 'dark' ? 'light' : 'dark'; render(); save(); });
@@ -1534,6 +1551,145 @@
   function rename(i) {
     const n = (prompt('Nazwa kanału', S.names[i]) || '').trim().slice(0, 12);
     if (n) { S.names[i] = n; if (B.ready) bleLabel(i); render(); save(); }
+  }
+
+  // ---------- Measuring: where does the sound drop? ----------
+  // Every meter frame (about 3 per second) is kept for 10 minutes: levels of the inputs, sala and (while this page
+  // is open) both monitors, plus the gain reduction of the compressors and the output limiter. A drop on an output
+  // is found by comparing each frame with the median of the 3 seconds before it, and is then explained by what the
+  // inputs, the limiter and the compressors did at that moment.
+  const MS = { rec: [], ev: [], open: false, ext: undefined, extAt: 0, drop: {} };
+  const OUTS = [{ key: 'sala', idx: [10, 11] }, { key: 'mon 1', idx: [12] }, { key: 'mon 2', idx: [13] }];
+  function measureFeed(p, now) {
+    const v = Array.from(p.slice(0, 15)), gr = p.length >= 17 ? p[15] << 8 | p[16] : 0;
+    const db = k => byteDb(v[k] || 0);
+    const ins = [0, 1, 2, 3].map(db).concat([[4, 5], [6, 7], [8, 9]].map(([a, b]) => Math.max(db(a), db(b))));
+    const ext = v[12] !== undefined && v[12] !== 0xbf && v[13] !== 0xbf;
+    if (ext && MS.ext === undefined) MS.ext = true;
+    const outs = [Math.max(db(10), db(11)), ext ? db(12) : null, ext ? db(13) : null];
+    const r = { t: Date.now(), ins, outs, gr, mutes: S.mutes.slice() };
+    MS.rec.push(r); while (MS.rec.length && r.t - MS.rec[0].t > 600000) MS.rec.shift();
+    outs.forEach((o, oi) => detectDrop(oi, o, r));
+    if (MS.open) measureRender();
+  }
+  const median = a => { const b = a.slice().sort((x, y) => x - y); return b.length ? b[b.length >> 1] : -144; };
+  function detectDrop(oi, o, r) {
+    if (o === null) return;
+    const past = MS.rec.filter(x => x !== r && r.t - x.t <= 3000 && x.outs[oi] !== null).map(x => x.outs[oi]);
+    const d = MS.drop[oi];
+    if (!d) {
+      if (past.length < 5) return;
+      const base = median(past);
+      if (base > -45 && o < base - 12) MS.drop[oi] = { from: r.t, base, low: o, frames: [r], before: MS.rec.slice(-12, -1) };
+    } else {
+      d.frames.push(r); d.low = Math.min(d.low, o);
+      if (o >= d.base - 6 || r.t - d.from > 20000) { delete MS.drop[oi]; MS.ev.unshift(explain(oi, d, r.t)); if (MS.ev.length > 40) MS.ev.pop(); if (MS.open) measureEvents(); toastOnce('drop' + r.t, 'Pomiar: spadek na ' + OUTS[oi].key + ' (' + Math.round(d.low - d.base) + ' dB). Szczegóły w Pomiarze.'); }
+    }
+  }
+  function explain(oi, d, end) {
+    const dur = (end - d.from) / 1000, frames = d.frames.slice(0, -1).length ? d.frames.slice(0, -1) : d.frames;
+    const all = d.before.concat(frames);
+    const lim = all.some(x => (x.gr >> 14 & 3) > 0);
+    const comp = CHANNELS.filter(c => c.gain).filter(c => all.some(x => (x.gr >> (c.ble * 2) & 3) > 0)).map(c => S.names[CHANNELS.indexOf(c)]);
+    const inDrop = [], inSteady = [];
+    for (let ci = 0; ci < 7; ci++) {
+      const base = median(d.before.map(x => x.ins[ci])), low = Math.min(...frames.map(x => x.ins[ci]));
+      if (base < -50) continue;
+      (low < base - 12 ? inDrop : inSteady).push(S.names[CHANNELS.findIndex(c => c.ble === ci)]);
+    }
+    const muted = CHANNELS.filter((c, i) => !c.master && frames.some(x => x.mutes[i]) && !d.before.some(x => x.mutes[i])).map(c => S.names[CHANNELS.indexOf(c)]);
+    let why;
+    if (muted.length) why = 'W tym czasie wyciszono kanał: ' + muted.join(', ') + '.';
+    else if (inDrop.length && !inSteady.length) why = 'Spadło już na wejściu (' + inDrop.join(', ') + '). Mikser dostał cichszy sygnał: sprawdź źródło, kabel, nadajnik albo zasilanie.';
+    else if (inDrop.length) why = 'Spadło na wejściu: ' + inDrop.join(', ') + '. Reszta wejść grała równo. Sprawdź źródło tych kanałów, kabel albo nadajnik.';
+    else if (lim) why = 'Wejścia grały równo, a limiter wyjścia ściszał (próg ' + fmt(S.lim[Math.min(oi, 2)]).replace(',0', '') + ' dB). Podnieś próg limitera.';
+    else if (comp.length) why = 'Wejścia grały równo, pracował kompresor kanału: ' + comp.join(', ') + '. Zmniejsz kompresję.';
+    else why = 'Wejścia grały równo, limiter i kompresory nie pracowały. Spadek powstał w mikserze za wejściami, czyli na sumie albo na samym wyjściu.';
+    const tm = new Date(d.from).toLocaleTimeString('pl-PL');
+    return { t: d.from, text: tm + '  ' + OUTS[oi].key + ': spadek o ' + Math.round(d.base - d.low) + ' dB na ' + dur.toFixed(1).replace('.', ',') + ' s', why };
+  }
+  let mCanvas = null, mRows = null, mEv = null, mInfo = null;
+  function openMeasure() {
+    const body = subPage('pomiar', 'mikser');
+    MS.open = true; MS.drop = {};
+    if (B.ready) bleMeterRequest();
+    let g = grp(body, 'ostatnia minuta');
+    mInfo = el('div', 'cfg-note'); g.append(mInfo);
+    mCanvas = el('canvas', 'm-graph'); g.append(mCanvas);
+    const leg = el('div', 'cfg-note m-legend'); leg.innerHTML = '<span class="m-k m-out"></span>sala <span class="m-k m-mon"></span>odsłuchy <span class="m-k m-in"></span>wejścia <span class="m-k m-lim"></span>limiter <span class="m-k m-cmp"></span>kompresor'; g.append(leg);
+    g = grp(body, 'teraz');
+    mRows = el('div', 'm-rows'); g.append(mRows);
+    g = grp(body, 'wykryte spadki');
+    mEv = el('div', 'm-ev'); g.append(mEv);
+    const keys = el('div', 'cfg-keys');
+    const clr = el('button', 'chan-switch small', { type: 'button' }); clr.textContent = 'wyczyść';
+    clr.addEventListener('click', () => { MS.ev = []; MS.rec = []; measureEvents(); measureRender(); });
+    const cp = el('button', 'chan-switch small', { type: 'button' }); cp.textContent = 'kopiuj raport';
+    cp.addEventListener('click', () => { const t = measureReport(); (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => toast('Raport skopiowany. Wklej go tutaj w rozmowie.'), () => { const a = el('textarea', 'm-copy'); a.value = t; mEv.after(a); a.select(); }); });
+    keys.append(clr, cp); g.append(keys);
+    const back = $('#sub .chan-back'); if (back) back.addEventListener('click', () => { MS.open = false; if (B.ready) bleMeterRequest(); });
+    measureEvents(); measureRender();
+  }
+  function measureEvents() {
+    if (!mEv) return;
+    mEv.textContent = '';
+    if (!MS.ev.length) { const n = el('div', 'cfg-note'); n.textContent = 'Na razie nic. Graj normalnie, a gdy dźwięk siądzie, spadek pojawi się tutaj z opisem, co go spowodowało.'; mEv.append(n); return; }
+    MS.ev.forEach(e => { const r = el('div', 'm-e'), a = el('b'), b = el('div'); a.textContent = e.text; b.textContent = e.why; r.append(a, b); mEv.append(r); });
+  }
+  function measureRender() {
+    if (!mCanvas || !document.getElementById('sub') || !mCanvas.isConnected) { MS.open = false; return; }
+    const live = metersLive(), last = MS.rec[MS.rec.length - 1];
+    mInfo.textContent = !B.ready ? 'Połącz się z mikserem przez Bluetooth, żeby mierzyć.' : !live ? 'Czekam na wskaźniki z miksera…'
+      : 'Mierzę. Zapisane ' + Math.round((last.t - MS.rec[0].t) / 1000) + ' s, ' + MS.rec.length + ' odczytów.' + (MS.ext === false ? ' Mikser nie podaje poziomów odsłuchów, widać tylko salę.' : '');
+    // graph: last 60 s, -60..0 dB
+    const W = mCanvas.clientWidth || 300, H = 150, dpr = window.devicePixelRatio || 1;
+    if (mCanvas.width !== Math.round(W * dpr)) { mCanvas.width = Math.round(W * dpr); mCanvas.height = H * dpr; }
+    const c = mCanvas.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
+    const now = Date.now(), X = t => W - (now - t) / 60000 * W, Y = d => 14 + (Math.min(0, Math.max(-60, d)) / -60) * (H - 36);
+    const css = getComputedStyle(document.documentElement), ink3 = css.getPropertyValue('--ink-3') || '#777';
+    c.strokeStyle = ink3; c.globalAlpha = 0.35; c.lineWidth = 1;
+    [0, -20, -40, -60].forEach(d => { c.beginPath(); c.moveTo(0, Y(d)); c.lineTo(W, Y(d)); c.stroke(); });
+    c.globalAlpha = 1; c.fillStyle = ink3; c.font = '10px sans-serif'; [0, -20, -40].forEach(d => c.fillText(d + ' dB', 2, Y(d) - 2));
+    const pts = MS.rec.filter(x => now - x.t <= 60000);
+    const line = (get, color, w, alpha) => { c.strokeStyle = color; c.lineWidth = w; c.globalAlpha = alpha; c.beginPath(); let on = false; pts.forEach(x => { const d = get(x); if (d === null) { on = false; return; } on ? c.lineTo(X(x.t), Y(d)) : c.moveTo(X(x.t), Y(d)); on = true; }); c.stroke(); c.globalAlpha = 1; };
+    for (let ci = 0; ci < 7; ci++) line(x => x.ins[ci], '#8A8A86', 1, 0.6);
+    line(x => x.outs[1], '#22B8CF', 1.5, 0.9); line(x => x.outs[2], '#8A4FE0', 1.5, 0.9);
+    line(x => x.outs[0], '#E8501A', 2.5, 1);
+    pts.forEach(x => {
+      const l = x.gr >> 14 & 3, k = x.gr & 0x3fff;
+      if (l) { c.fillStyle = '#D8345F'; c.fillRect(X(x.t) - 2, H - 18, 4, 6 + l * 2); }
+      if (k) { c.fillStyle = '#F2B807'; c.fillRect(X(x.t) - 2, H - 8, 4, 6); }
+    });
+    // live rows
+    if (!last) { mRows.textContent = ''; return; }
+    const rows = [];
+    for (let ci = 0; ci < 7; ci++) { const i = CHANNELS.findIndex(c => c.ble === ci); rows.push([S.names[i], last.ins[ci], CHANNELS[i].gain ? last.gr >> (ci * 2) & 3 : 0, 'kompr.']); }
+    rows.push(['sala', last.outs[0], last.gr >> 14 & 3, 'limiter']);
+    if (last.outs[1] !== null) { rows.push(['mon 1', last.outs[1], 0, '']); rows.push(['mon 2', last.outs[2], 0, '']); }
+    mRows.textContent = '';
+    rows.forEach(([n, d, g, what]) => {
+      const r = el('div', 'm-row'), a = el('span', 'chan-label'), bar = el('span', 'm-bar'), v = el('span', 'm-val');
+      a.textContent = n; bar.style.setProperty('--p', Math.max(0, Math.min(1, (d + 60) / 60)));
+      v.textContent = (d <= -90 ? '-∞' : Math.round(d)) + ' dB' + (g ? ' ' + '•'.repeat(g) : '');
+      if (g) v.title = what;
+      r.append(a, bar, v); mRows.append(r);
+    });
+  }
+  function measureReport() {
+    const L = [];
+    L.push('FLOW 8 Control v' + APP_VERSION + ', pomiar ' + new Date().toLocaleString('pl-PL'));
+    L.push('limitery: sala ' + S.lim[0] + ', mon1 ' + S.lim[1] + ', mon2 ' + S.lim[2] + ' dB; ustawienia ' + JSON.stringify(S.cfg));
+    L.push('kompresory: ' + CHANNELS.filter(c => c.gain).map(c => S.names[CHANNELS.indexOf(c)] + ' ' + S.comp[CHANNELS.indexOf(c)] + '%').join(', '));
+    L.push('suwaki OUT: ' + BUSES.map((b, bi) => b.short + ' ' + levelDb(S.levels[bi][7])).join(', '));
+    L.push('wyciszenia: ' + CHANNELS.map((c, i) => S.mutes[i] ? S.names[i] : '').filter(Boolean).join(', ') + '; solo: ' + CHANNELS.map((c, i) => S.solos[i] ? S.names[i] : '').filter(Boolean).join(', '));
+    if (B.stateRaw) L.push('stan miksera: ' + B.stateRaw.map(x => x.toString(16).padStart(2, '0')).join(' '));
+    L.push('');
+    MS.ev.slice().reverse().forEach(e => { L.push(e.text); L.push('  ' + e.why); });
+    L.push('');
+    L.push('ostatnie 2 minuty (czas s, wejścia 1-4,5/6,7/8,usb, sala, mon1, mon2, gr hex):');
+    const t0 = Date.now();
+    MS.rec.filter(x => t0 - x.t <= 120000).forEach(x => L.push(((x.t - t0) / 1000).toFixed(1) + ' ' + x.ins.map(d => Math.round(d)).join(',') + ' | ' + x.outs.map(d => d === null ? '-' : Math.round(d)).join(',') + ' | ' + x.gr.toString(16)));
+    return L.join('\n');
   }
 
   // ---------- Update: newest APK from the project's GitHub release ----------
