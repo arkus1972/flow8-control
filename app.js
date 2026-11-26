@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.52'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.53'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -671,14 +671,14 @@
         if (v === S.levels[S.bus][i]) return;
         fader.value = Math.round(v); S.levels[S.bus][i] = v; slide(v); sendLevel(i); render(); save();
       };
-      let drag = null;
+      let drag = null; const det = detent();
       fader.addEventListener('pointerdown', e => {
         e.preventDefault(); select(i); fader.focus({ preventScroll: true });
         fader.setPointerCapture(e.pointerId);
         const r = fader.getBoundingClientRect(), th = (portrait() ? 56 : 34) * K;
         const travel = r.height - th, cur = +fader.value;
         const thumbY = r.bottom - th / 2 - cur / 127 * travel;
-        drag = { id: e.pointerId, travel, y0: e.clientY, v0: detentIn(S.levels[S.bus][i]) };
+        drag = { id: e.pointerId, travel, y0: e.clientY, v0: S.levels[S.bus][i] }; det.start(drag.v0);
         // Only the cap moves the fader (FLOW Mix never jumps to the touched spot either):
         // a finger brushing the track must not change the mix.
         if (Math.abs(e.clientY - thumbY) > th / 2 + 10 * K) drag = null;
@@ -686,7 +686,7 @@
       fader.addEventListener('pointermove', e => {
         if (!drag || e.pointerId !== drag.id) return;
         e.preventDefault();
-        setFader(detentOut(drag.v0 + (drag.y0 - e.clientY) / drag.travel * 127));
+        setFader(det.map(drag.v0 + (drag.y0 - e.clientY) / drag.travel * 127, 127 / drag.travel));
       });
       fader.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
       const endDrag = () => { drag = null; };
@@ -1035,8 +1035,8 @@
     sw('gałka gain', 'vibK', null, () => notch());
     sw('suwak i pan', 'vibF', null, () => bump(true));
     g = grp(body, 'suwak');
-    sw('zatrzask 0 dB', 'detent', [['włączony', true], ['wyłączony', false]]);
-    const n = el('div', 'cfg-note'); n.textContent = 'Zatrzask lekko przytrzymuje suwak na 0 dB. Wibracja suwaka odzywa się przy 0 dB, na końcach skali i w środku panoramy.'; g.append(n);
+    choice(g, 'zatrzask 0 dB', () => S.detent === false ? 0 : S.detent === 1 ? 1 : 2, v => { S.detent = v === 0 ? false : v; }, [['brak', 0], ['lekki', 1], ['mocny', 2]]);
+    const n = el('div', 'cfg-note'); n.textContent = 'Zatrzask łapie suwak na 0 dB i puszcza dopiero po wyraźnym ruchu palca. Wibracja suwaka odzywa się przy 0 dB, na końcach skali i w środku panoramy.'; g.append(n);
     chanRender();
   }
   function openSetup() {
@@ -1373,12 +1373,29 @@
     if (S.vibF === false) return;
     try { if (NATIVE && NATIVE.buzz) NATIVE.buzz(strong ? {} : { soft: true }).catch(() => {}); else if (navigator.vibrate) navigator.vibrate(strong ? 18 : 8); } catch (e) {}
   }
-  // 0 dB detent, like the centre click of a real fader: the cap falls into 0 dB and holds there
-  // until the finger has travelled a little further (DETENT on each side), then moves on without a jump.
-  const DETENT = 3.2;                                              // in fader units (0-127), about 2.5 % of the travel
+  // 0 dB detent, like the centre click of a real fader. Once the cap reaches 0 dB it is caught there and
+  // stays until the finger has moved a clear distance away from where it was caught (in either direction),
+  // so stopping on 0 dB needs no precision. After the release the cap moves on without a jump.
   const zeroPos = () => fine() ? 191 * 127 / 255 : 111;            // the position that reads 0,0 dB
-  const detentIn = v => { if (S.detent === false) return v; const z = zeroPos(); return v > z + 0.01 ? v + DETENT : v < z - 0.01 ? v - DETENT : z; };   // fader position to finger position
-  const detentOut = r => { if (S.detent === false) return r; const z = zeroPos(); return r > z + DETENT ? r - DETENT : r < z - DETENT ? r + DETENT : z; }; // and back
+  const detentPx = () => S.detent === false ? 0 : S.detent === 1 ? 10 : 22;   // finger travel needed to break out: light / strong
+  function detent() {
+    let off = 0, lock = null, prev = 0;
+    return {
+      start(v) { off = 0; prev = v; lock = detentPx() && Math.abs(v - zeroPos()) < 0.3 ? v : null; },
+      // r: where the cap would be without the detent, perPx: fader units per pixel of finger travel
+      map(r, perPx) {
+        const B = detentPx() * K * perPx, z = zeroPos();
+        if (!B) return r;
+        if (lock !== null) {
+          if (Math.abs(r - lock) <= B) return z;
+          off = z - (lock + Math.sign(r - lock) * B); lock = null; prev = r + off; return prev;
+        }
+        const v = r + off;
+        if ((prev - z) * (v - z) <= 0) { lock = r; prev = z; return z; }
+        prev = v; return v;
+      }
+    };
+  }
   // fader sound: one very quiet, soft tick per 0.5 dB step, like a fine detent (the earlier hiss was too coarse)
   let tickAt = 0, lastDb = '';
   function slide(v) {
@@ -1511,11 +1528,12 @@
         wrap.append(bar, mark);
         const o = { bar, val, name, mark, peak: 0, peakAt: 0, dragAt: 0 };
         // finger on a column: pull up for louder, down for quieter (relative, so touching never jumps)
-        let a = false, y0 = 0, v0 = 0;
-        col.addEventListener('pointerdown', e => { a = true; y0 = e.clientY; v0 = detentIn(S.levels[S.bus][i]); col.setPointerCapture(e.pointerId); select(i); o.dragAt = performance.now(); bigRender(); });
+        let a = false, y0 = 0, v0 = 0; const det = detent();
+        col.addEventListener('pointerdown', e => { a = true; y0 = e.clientY; v0 = S.levels[S.bus][i]; det.start(v0); col.setPointerCapture(e.pointerId); select(i); o.dragAt = performance.now(); bigRender(); });
         col.addEventListener('pointermove', e => {
           if (!a) return;
-          const p = Math.max(0, Math.min(1, detentOut(v0 + (y0 - e.clientY) / Math.max(wrap.getBoundingClientRect().height, 60) * 127) / 127));
+          const hh = Math.max(wrap.getBoundingClientRect().height, 60);
+          const p = Math.max(0, Math.min(1, det.map(v0 + (y0 - e.clientY) / hh * 127, 127 / hh) / 127));
           const v = fine() ? Math.round(p * 255) * 127 / 255 : Math.round(p * 127);
           o.dragAt = performance.now();
           if (v === S.levels[S.bus][i]) return;
