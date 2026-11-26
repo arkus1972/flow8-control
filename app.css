@@ -789,3 +789,8 @@ html.v-meters .big { display: grid; grid-template-columns: repeat(8, minmax(0, 1
 
 .chan-row[hidden], .cfg-note[hidden] { display: none; }
 .cfg-note.warn { color: var(--accent); }
+/* low landscape screens (phones): the menu goes two columns wide so every item stays on screen */
+@media (orientation: landscape) and (max-height: 520px) {
+  .conn-menu, .conn-menu[id] { width: 440px; grid-template-columns: 1fr 1fr; max-height: calc(100vh - 60px); overflow-y: auto; }
+  .conn-menu .conn-status { grid-column: 1 / -1; }
+}

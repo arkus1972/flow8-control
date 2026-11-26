@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.50'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.51'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -678,7 +678,7 @@
         const r = fader.getBoundingClientRect(), th = (portrait() ? 56 : 34) * K;
         const travel = r.height - th, cur = +fader.value;
         const thumbY = r.bottom - th / 2 - cur / 127 * travel;
-        drag = { id: e.pointerId, travel, y0: e.clientY, v0: S.levels[S.bus][i] };
+        drag = { id: e.pointerId, travel, y0: e.clientY, v0: detentIn(S.levels[S.bus][i]) };
         // Only the cap moves the fader (FLOW Mix never jumps to the touched spot either):
         // a finger brushing the track must not change the mix.
         if (Math.abs(e.clientY - thumbY) > th / 2 + 10 * K) drag = null;
@@ -686,7 +686,7 @@
       fader.addEventListener('pointermove', e => {
         if (!drag || e.pointerId !== drag.id) return;
         e.preventDefault();
-        setFader(drag.v0 + (drag.y0 - e.clientY) / drag.travel * 127);
+        setFader(detentOut(drag.v0 + (drag.y0 - e.clientY) / drag.travel * 127));
       });
       fader.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
       const endDrag = () => { drag = null; };
@@ -772,6 +772,8 @@
     $('#sel-gain').addEventListener('click', () => CHANNELS[S.sel].gain ? askGain(S.sel) : askPan(S.sel));
     const ck = $('#click-toggle'), ckText = () => { ck.textContent = 'Dźwięki i wibracja: ' + (S.click === false ? 'wyłączone' : 'włączone'); };
     ck.addEventListener('click', e => { e.stopPropagation(); S.click = S.click === false; ckText(); save(); notch(); }); ckText();
+    const sv = $('#sfx-vol'), svText = () => { const v = sfxVol(); sv.textContent = 'Głośność dźwięków: ' + (v ? Math.round(v * 100) + '%' : 'cisza'); };
+    sv.addEventListener('click', e => { e.stopPropagation(); S.sfx = SFX_STEPS[(SFX_STEPS.indexOf(sfxVol()) + 1) % SFX_STEPS.length]; svText(); save(); notch(); }); svText();
     $('#view').addEventListener('click', () => setView(VIEWS[(VIEWS.indexOf(S.view || '') + 1) % VIEWS.length]));
     $('#theme').addEventListener('click', () => { S.theme = S.theme === 'dark' ? 'light' : 'dark'; render(); save(); });
 
@@ -1322,6 +1324,15 @@
     if (clickCtx.state === 'suspended') clickCtx.resume();
     return clickCtx;
   }
+  // volume of the interface sounds (knob click, fader tick), set in the menu; vibration is not affected
+  const SFX_STEPS = [0, 0.25, 0.5, 1, 1.6];
+  let sfxNode = null;
+  const sfxVol = () => typeof S.sfx === 'number' ? S.sfx : 1;
+  function sfx(c) {
+    if (!sfxNode) { sfxNode = c.createGain(); sfxNode.connect(c.destination); }
+    sfxNode.gain.value = sfxVol();
+    return sfxNode;
+  }
   function notch() {
     if (S.click === false) return;
     try { if (NATIVE && NATIVE.buzz) NATIVE.buzz().catch(() => {}); else if (navigator.vibrate) navigator.vibrate(18); } catch (e) {}
@@ -1329,24 +1340,30 @@
       const c = audio(), t = c.currentTime, o = c.createOscillator(), g = c.createGain(), o2 = c.createOscillator(), g2 = c.createGain();
       o.type = 'square'; o.frequency.setValueAtTime(2600, t); o.frequency.exponentialRampToValueAtTime(700, t + 0.016);
       g.gain.setValueAtTime(0.32, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.026);
-      o.connect(g); g.connect(c.destination); o.start(t); o.stop(t + 0.03);
+      o.connect(g); g.connect(sfx(c)); o.start(t); o.stop(t + 0.03);
       // short low thump under the click, so the notch feels mechanical
       o2.type = 'sine'; o2.frequency.setValueAtTime(190, t); o2.frequency.exponentialRampToValueAtTime(70, t + 0.03);
       g2.gain.setValueAtTime(0.45, t); g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.04);
-      o2.connect(g2); g2.connect(c.destination); o2.start(t); o2.stop(t + 0.045);
+      o2.connect(g2); g2.connect(sfx(c)); o2.start(t); o2.stop(t + 0.045);
     } catch (e) {}
   }
   // a light tap of the motor: the fader reaching 0 dB, top or bottom, the pan reaching centre or an end
-  function bump() {
+  function bump(strong) {
     if (S.click === false) return;
-    try { if (NATIVE && NATIVE.buzz) NATIVE.buzz({ soft: true }).catch(() => {}); else if (navigator.vibrate) navigator.vibrate(8); } catch (e) {}
+    try { if (NATIVE && NATIVE.buzz) NATIVE.buzz(strong ? {} : { soft: true }).catch(() => {}); else if (navigator.vibrate) navigator.vibrate(strong ? 18 : 8); } catch (e) {}
   }
+  // 0 dB detent, like the centre click of a real fader: the cap falls into 0 dB and holds there
+  // until the finger has travelled a little further (DETENT on each side), then moves on without a jump.
+  const DETENT = 3.2;                                              // in fader units (0-127), about 2.5 % of the travel
+  const zeroPos = () => fine() ? 191 * 127 / 255 : 111;            // the position that reads 0,0 dB
+  const detentIn = v => { const z = zeroPos(); return v > z + 0.01 ? v + DETENT : v < z - 0.01 ? v - DETENT : z; };   // fader position to finger position
+  const detentOut = r => { const z = zeroPos(); return r > z + DETENT ? r - DETENT : r < z - DETENT ? r + DETENT : z; }; // and back
   // fader sound: one very quiet, soft tick per 0.5 dB step, like a fine detent (the earlier hiss was too coarse)
   let tickAt = 0, lastDb = '';
   function slide(v) {
     const db = levelDb(v), was = lastDb; lastDb = db;
     if (db === was) return;
-    if (was !== '' && (db === '0,0' || v >= 127 || v <= 0)) bump();
+    if (was !== '' && (db === '0,0' || v >= 127 || v <= 0)) bump(db === '0,0');
     if (S.click === false) return;
     const now = performance.now(); if (now - tickAt < 28) return; tickAt = now;
     try {
@@ -1354,7 +1371,7 @@
       o.type = 'triangle'; o.frequency.setValueAtTime(1500, t); o.frequency.exponentialRampToValueAtTime(700, t + 0.008);
       f.type = 'lowpass'; f.frequency.value = 2600;
       g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.035, t + 0.001); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.012);
-      o.connect(f); f.connect(g); g.connect(c.destination); o.start(t); o.stop(t + 0.015);
+      o.connect(f); f.connect(g); g.connect(sfx(c)); o.start(t); o.stop(t + 0.015);
     } catch (e) {}
   }
   function setGain(i, v) {
@@ -1474,10 +1491,10 @@
         const o = { bar, val, name, mark, peak: 0, peakAt: 0, dragAt: 0 };
         // finger on a column: pull up for louder, down for quieter (relative, so touching never jumps)
         let a = false, y0 = 0, v0 = 0;
-        col.addEventListener('pointerdown', e => { a = true; y0 = e.clientY; v0 = S.levels[S.bus][i]; col.setPointerCapture(e.pointerId); select(i); o.dragAt = performance.now(); bigRender(); });
+        col.addEventListener('pointerdown', e => { a = true; y0 = e.clientY; v0 = detentIn(S.levels[S.bus][i]); col.setPointerCapture(e.pointerId); select(i); o.dragAt = performance.now(); bigRender(); });
         col.addEventListener('pointermove', e => {
           if (!a) return;
-          const p = Math.max(0, Math.min(1, v0 / 127 + (y0 - e.clientY) / Math.max(wrap.getBoundingClientRect().height, 60)));
+          const p = Math.max(0, Math.min(1, detentOut(v0 + (y0 - e.clientY) / Math.max(wrap.getBoundingClientRect().height, 60) * 127) / 127));
           const v = fine() ? Math.round(p * 255) * 127 / 255 : Math.round(p * 127);
           o.dragAt = performance.now();
           if (v === S.levels[S.bus][i]) return;
