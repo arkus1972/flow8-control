@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.57'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.58'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -210,7 +210,7 @@
   function bleFxSetup(n) {
     const f = S.fx[n];
     B.touched.set('x' + n, performance.now());
-    bleQueue('x' + n, 0x11, [0x0c + n, f.v1, f.v2, f.v3, f.en >> 1 & 1, f.en >> 2 & 1, f.en >> 3 & 1]);
+    bleQueue('x' + n, 0x11, [0x0c + n, f.v1, f.v2, f.v3, f.en >> 1 & 7]);   // main/mon1/mon2 are bools: FLOW Mix packs them into one byte (bit0 main)
   }
   function bleFxPreset(n) {
     bleQueue('xp' + n, 0x31, [0x0c + n, S.fx[n].preset]);
@@ -220,7 +220,7 @@
   // 0x25 Setting = [id][len=1][value]; ids: 2 BT/USB play to phones only, 3 foot switch (1 = snapshots, 0 = FX mute/tap),
   // 7 USB streaming mode, 8 MON 1/2 source (0 mon, 1 USB 1/2, 2 USB 3/4), 9 ch 5/6 = USB 1/2, 10 ch 7/8 = USB 3/4,
   // 11 monitor stereo link, 12 phones from monitor, 13 phones post fader, 14 main -10 dBV pad, 15 monitor pad, 17 monitor post fader
-  const utf8 = t => Array.from(new TextEncoder().encode(t)).slice(0, 20);
+  const utf8 = t => { const out = []; for (const ch of t) { const b = new TextEncoder().encode(ch); if (out.length + b.length > 20) break; out.push(...b); } return out; };   // never cut a letter in half
   const text8 = b => { try { return new TextDecoder().decode(new Uint8Array(b)); } catch (e) { return String.fromCharCode(...b); } };
   function bleSetting(id, val) { S.cfg[id] = val; B.touched.set('s' + id, performance.now()); bleQueue('s' + id, 0x25, [id, 1, val]); }
   function bleLimiter(bi) { B.touched.set('lim' + bi, performance.now()); bleQueue('lim' + bi, 0x14, [BUSES[bi].dst, Math.max(0x3c, Math.min(0x78, Math.round((S.lim[bi] + 60) * 2)))]); }
@@ -247,7 +247,7 @@
     bleQueue('p' + i, 0x00, [id, panByte(S.pans[i])]);
   }
   function bleMute(i) { const c = CHANNELS[i]; if (!c.master) bleQueue('m' + i, 0x08, [c.ble, S.mutes[i] ? 1 : 0]); }
-  function bleSolo(i) { const c = CHANNELS[i]; if (!c.master) bleQueue('s' + i, 0x01, [c.ble, S.solos[i] ? 1 : 0]); }
+  function bleSolo(i) { const c = CHANNELS[i]; if (!c.master) bleQueue('so' + i, 0x01, [c.ble, S.solos[i] ? 1 : 0]); }
   function bleSendAll() {
     CHANNELS.forEach((c, i) => {
       BUSES.forEach((b, bi) => bleLevel(i, bi));
@@ -290,6 +290,11 @@
   }
 
   async function bleConnect() {
+    if (B.connecting) return;                       // a second tap while connecting would start a second, competing attempt
+    B.connecting = true;
+    try { await bleConnectInner(); } finally { B.connecting = false; }
+  }
+  async function bleConnectInner() {
     if (NATIVE) return bleConnectNative();
     if (!navigator.bluetooth) {
       toast('Ta przeglądarka nie obsługuje Bluetooth. Użyj Chrome na Androidzie.');
@@ -365,7 +370,7 @@
     let p;
     if (count <= 1) p = b.slice(2, -1);
     else {
-      const key = cmd + ':' + b[2], parts = B.frags.get(key) || [];
+      const key = cmd + ':' + b[2], parts = b[3] === 0 ? [] : B.frags.get(key) || [];
       parts[b[3]] = b.slice(4, -1); B.frags.set(key, parts);
       if (parts.filter(Boolean).length < count) return;
       B.frags.delete(key);
@@ -453,7 +458,7 @@
       case 0x11: {                                                // effect parameters
         const n = p[0] - 0x0c;
         if (n < 0 || n > 1 || now - (B.touched.get('x' + n) || 0) < 400) break;
-        Object.assign(S.fx[n], { v1: Math.min(100, p[1]), v2: p[2] ? 1 : 0, v3: p[3] }); render(); save(); break;
+        Object.assign(S.fx[n], { v1: Math.min(100, p[1]), v2: p[2] ? 1 : 0, v3: p[3] }); if (p.length > 4) S.fx[n].en = S.fx[n].en & 1 | (p[4] & 7) << 1; render(); save(); break;
       }
       case 0x31: { const n = p[0] - 0x0c; if (n === 0 || n === 1) { S.fx[n].preset = p[1] & 15; render(); save(); } break; }
       case 0x15: { const i = idx(p[0]); if (i >= 0) { S.p48[i] = !!p[1]; render(); save(); } break; }
@@ -661,7 +666,7 @@
         // master strip: tap tempo instead of mute/solo (FX2 delays follow it)
         const tap = el('button', 'key tap', { type: 'button', 'aria-label': 'Tap tempo efektu' });
         tap.textContent = 'TAP';
-        tap.addEventListener('click', () => { send([0x90 + GLOBAL_CH - 1, 0, 100], true); toast('Tap tempo'); });
+        tap.addEventListener('click', fxTap);
         keys.append(tap);
       } else {
         keys.append(mute, solo);
@@ -751,6 +756,7 @@
       const b = el('button', 'scene', { type: 'button', 'aria-pressed': 'false', 'aria-label': 'Wczytaj scenę ' + n + ' z miksera' });
       b.textContent = n;
       b.addEventListener('click', () => {
+        if (!B.ready && !out) { toast('Najpierw połącz się z mikserem.'); return; }
         S.scene = n - 1;
         if (B.ready) bleScene(n - 1); else pc(GLOBAL_CH, n);
         render(); save(); toast('Wczytano scenę ' + n + ' w mikserze');
@@ -1700,7 +1706,7 @@
     fetch('https://api.github.com/repos/arkus1972/flow8-control/releases/tags/android', { cache: 'no-store' }).then(r => r.json()).then(j => {
       const m = /v(\d+\.\d+)/.exec(j.name || '');
       if (!m) throw 0;
-      const newer = parseFloat(m[1]) > parseFloat(APP_VERSION);
+      const a = m[1].split('.').map(Number), b = APP_VERSION.split('.').map(Number), newer = a[0] > b[0] || (a[0] === b[0] && a[1] > b[1]);
       info.textContent = newer ? 'Masz v' + APP_VERSION + ', jest nowsza: v' + m[1] : 'Masz najnowszą wersję (v' + APP_VERSION + ')';
       document.getElementById('upd-go').classList.toggle('go', newer);
     }).catch(() => { info.textContent = 'Masz v' + APP_VERSION + '. Nie udało się sprawdzić (brak internetu?)'; });
@@ -1973,6 +1979,18 @@
     o.connect(g).connect(M.ctx.destination);
     o.start(t); o.stop(t + 0.06);
   }
+  // tap tempo for the effects: USB MIDI gets a tap note, Bluetooth gets the tempo itself (as FLOW Mix does)
+  const fxTaps = [];
+  function fxTap() {
+    if (!B.ready) { send([0x90 + GLOBAL_CH - 1, 0, 100], true); toast(out ? 'Tap tempo' : 'Najpierw połącz się z mikserem.'); return; }
+    const now = performance.now();
+    while (fxTaps.length && now - fxTaps[0] > 2500) fxTaps.shift();
+    fxTaps.push(now);
+    if (fxTaps.length < 2) { toast('Stuknij jeszcze raz w rytm'); return; }
+    const bpm = Math.round(60000 * (fxTaps.length - 1) / (now - fxTaps[0]));
+    if (bpm < 40 || bpm > 240) return;
+    S.tempo = bpm; bleTempo(); chanRender(); save(); toast('Tempo efektów: ' + bpm + ' bpm');
+  }
   function onBeat(b) {
     if (!M.running) return;
     const spans = $('#beats').children;
@@ -1980,8 +1998,8 @@
     const led = $('#beat-led');
     led.classList.add('on'); setTimeout(() => led.classList.remove('on'), 90);
     if (M.tapLeft > 0 && S.metroFx !== false && M.bpm >= 50 && M.bpm <= 240) {
-      send([0x90 + GLOBAL_CH - 1, 0, 100], true);
-      M.tapLeft--;
+      if (B.ready) { if (S.tempo !== M.bpm) { S.tempo = M.bpm; bleTempo(); save(); } M.tapLeft = 0; }   // Bluetooth: send the tempo once
+      else { send([0x90 + GLOBAL_CH - 1, 0, 100], true); M.tapLeft--; }
     }
   }
   function metroRender() {

@@ -86,10 +86,13 @@ public class FlowBlePlugin extends Plugin {
         BluetoothManager bm = (BluetoothManager) getContext().getSystemService(Context.BLUETOOTH_SERVICE);
         BluetoothAdapter ad = bm == null ? null : bm.getAdapter();
         if (ad == null || !ad.isEnabled()) { call.reject("Włącz Bluetooth w telefonie"); return; }
+        BluetoothLeScanner sc = ad.getBluetoothLeScanner();
+        if (sc == null) { call.reject("Włącz Bluetooth w telefonie"); return; }
+        stopScan(sc);                                   // an earlier search still running must not connect too
         closeGatt();
+        if (connectCall != null && connectCall != call) connectCall.reject("Przerwano");
         connectCall = call;
         attempts = 0;
-        BluetoothLeScanner sc = ad.getBluetoothLeScanner();
         scanStart = System.currentTimeMillis();
         scanCb = new ScanCallback() {
             @Override public void onScanResult(int type, ScanResult r) {
@@ -110,9 +113,10 @@ public class FlowBlePlugin extends Plugin {
             }
             @Override public void onScanFailed(int code) { fail("Skanowanie nie działa (" + code + ")"); }
         };
+        final ScanCallback mine = scanCb;
         sc.startScan(null, new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), scanCb);
-        main.postDelayed(() -> {
-            if (scanCb != null) { stopScan(sc); fail("Nie znaleziono FLOW 8. Czy mikser jest włączony, a FLOW Mix zamknięta?"); }
+        main.postDelayed(() -> {                        // only this search's timeout, never a later one's
+            if (scanCb != null && scanCb == mine) { stopScan(sc); fail("Nie znaleziono FLOW 8. Czy mikser jest włączony, a FLOW Mix zamknięta?"); }
         }, 12000);
     }
 
@@ -139,7 +143,7 @@ public class FlowBlePlugin extends Plugin {
                 BluetoothDevice d = g.getDevice();
                 g.close();
                 if (connectCall != null && attempts < 4) {          // first attempt often fails on Android
-                    main.postDelayed(() -> connectDevice(d), 600L * attempts);
+                    main.postDelayed(() -> { if (connectCall != null) connectDevice(d); }, 600L * attempts);   // not after the user gave up
                 } else if (connectCall != null) {
                     gatt = null; fail("Połączenie nieudane (status " + status + ")");
                 } else {
