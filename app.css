@@ -880,3 +880,5 @@ html.v-meters .big { display: grid; grid-template-columns: repeat(8, minmax(0, 1
 .key svg.dotted { fill: currentColor; stroke: none; width: 54%; max-width: 40px; height: auto; }
 .readout-bus { max-width: 100%; overflow: hidden; }
 @media (orientation: portrait) { .readout-top { max-width: 100%; } .readout-bus { align-self: stretch; } }
+/* portrait: a sideways swipe that starts on the knob or on the fader track still moves to the next channel */
+@media (orientation: portrait) { .knob, .fader { touch-action: pan-x; } }

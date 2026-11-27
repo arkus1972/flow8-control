@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.65'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.66'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -70,6 +70,9 @@
     if (!Array.isArray(S.fx) || S.fx.length !== 2) S.fx = f0.fx;
     if (!Array.isArray(S.geq) || S.geq.length !== 3) S.geq = f0.geq;
   } catch (e) { /* storage unavailable: run with defaults */ }
+  // language: Polish, or English (i18n.js translates everything that reaches the screen)
+  window.LANG = S.lang || (/^pl/i.test(navigator.language || 'pl') ? 'pl' : 'en');
+  const prompt = (m, d) => window.prompt(tr(m), d), confirm = m => window.confirm(tr(m));
   let saveTimer = 0;
   const save = () => {
     clearTimeout(saveTimer);
@@ -90,7 +93,7 @@
   const gainDb = v => fmt(-20 + v * 80 / 127);
   function fmt(d) {
     const r = Math.round(d * 10) / 10;
-    const s = Math.abs(r).toFixed(1).replace('.', ',');
+    const s = Math.abs(r).toFixed(1).replace('.', window.LANG === 'en' ? '.' : ',');
     return (r > 0 ? '+' : r < 0 ? '-' : '') + s;
   }
   const clamp = v => Math.max(0, Math.min(127, Math.round(v)));
@@ -623,7 +626,7 @@
   let toastTimer = 0;
   function toast(msg) {
     const t = $('#toast');
-    t.textContent = msg; t.classList.add('show');
+    msg = tr(String(msg)); t.textContent = msg; t.classList.add('show');
     clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), Math.max(2600, msg.length * 70));
   }
   const portrait = () => matchMedia('(orientation: portrait)').matches;
@@ -644,7 +647,7 @@
 
       const head = el('div', 's-head');
       const num = el('span', 's-num'); num.textContent = c.num;
-      const name = el('button', 's-name', { type: 'button', title: 'Przytrzymaj, aby zmienić nazwę' });
+      const name = el('button', 's-name', { type: 'button', title: tr('Przytrzymaj, aby zmienić nazwę'), 'data-notr': '' });
       name.addEventListener('dblclick', () => rename(i));
       onHold(name, () => rename(i));
       const lock = el('span', 's-lock', { 'aria-label': 'zablokowany' });
@@ -713,7 +716,12 @@
         e.preventDefault();
         setFader(det.map(drag.v0 + (drag.y0 - e.clientY) / drag.travel * 127, 127 / drag.travel));
       });
-      fader.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+      // a finger on the cap belongs to the fader; anywhere else on the track a sideways swipe moves to the next channel (portrait)
+      fader.addEventListener('touchstart', e => {
+        const t = e.touches[0], r = fader.getBoundingClientRect(), th = (portrait() ? 56 : 34) * K;
+        const thumbY = r.bottom - th / 2 - (+fader.value) / 127 * (r.height - th);
+        if (!portrait() || Math.abs(t.clientY - thumbY) <= th / 2 + 10 * K) e.preventDefault();
+      }, { passive: false });
       const endDrag = () => { drag = null; };
       fader.addEventListener('pointerup', endDrag);
       fader.addEventListener('pointercancel', endDrag);
@@ -1016,7 +1024,7 @@
   }
 
   const EQ_NAMES = ['niskie', 'niski środek', 'wysoki środek', 'wysokie'];
-  const hz = f => f >= 1000 ? String(f / 1000).replace('.', ',') + ' kHz' : f + ' Hz';
+  const hz = f => f >= 1000 ? String(f / 1000).replace('.', window.LANG === 'en' ? '.' : ',') + ' kHz' : f + ' Hz';
   function openChan(i) {
     if (CHANNELS[i].master) return;
     closeChan(); chanOpen = i; chanRows = [];
@@ -1026,7 +1034,7 @@
     back.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>';
     back.addEventListener('click', closeChan);
     const num = el('span', 'chan-num'); num.textContent = CHANNELS[i].num;
-    const name = el('span', 'chan-name'); name.textContent = S.names[i];
+    const name = el('span', 'chan-name', { 'data-notr': '' }); name.textContent = S.names[i];
     onHold(name, () => { rename(i); name.textContent = S.names[i]; });
     head.append(back, num, name);
     const body = el('div', 'chan-body');
@@ -1041,7 +1049,7 @@
     const row = (label, o) => mkRow(label, o, chanRows);
     group('poziomy', (CHANNELS[i].gain ? [row('gain', {
       get: () => S.gains[i] / 127, set: p => setGain(i, p * 127),
-      text: () => gainDb(S.gains[i]).replace(',0', '') + ' dB', ask: () => askGain(i)
+      text: () => gainDb(S.gains[i]).replace(/[,.]0$/, '') + ' dB', ask: () => askGain(i)
     })] : []).concat(BUSES.map((b, bi) => row(b.label, {
       get: () => S.levels[bi][i] / 127,
       set: p => { S.levels[bi][i] = fine() ? Math.round(p * 255) * 127 / 255 : Math.round(p * 127); sendLevelBus(i, bi); },
@@ -1130,6 +1138,7 @@
     const body = subPage('ustawienia', 'aplikacja');
     let g = grp(body, 'wygląd');
     choice(g, 'motyw', () => S.theme, v => { S.theme = v; render(); }, [['jasny', 'light'], ['ciemny', 'dark']]);
+    choice(g, 'język', () => window.LANG, v => { if (v === window.LANG) return; S.lang = v; try { localStorage.setItem(STORE, JSON.stringify(S)); } catch (e) {} location.reload(); }, [['polski', 'pl'], ['English', 'en']]);
     g = grp(body, 'dźwięki');
     const snd = (label, k, play) => g.append(mkRow(label, {
       get: () => vol(k) / 2,
@@ -1177,7 +1186,7 @@
       const r = row(label, {
         get: () => (S.lim[bi] + 30) / 30,
         set: p => put(Math.round((p * 30 - 30) * 2) / 2),
-        text: () => { const gr = B.ready && bi === 0 ? (B.gr || 0) >> 14 & 3 : 0; return (gr ? '•'.repeat(gr) + ' ' : '') + fmt(S.lim[bi]).replace(',0', '') + ' dB'; },   // dots = limiter working right now
+        text: () => { const gr = B.ready && bi === 0 ? (B.gr || 0) >> 14 & 3 : 0; return (gr ? '•'.repeat(gr) + ' ' : '') + fmt(S.lim[bi]).replace(/[,.]0$/, '') + ' dB'; },   // dots = limiter working right now
         ask: () => askNum('Limiter ' + label.replace('limiter ', '') + ' (dB)', fmt(S.lim[bi]).replace('+', ''), 'Od -30 do 0, co 0,5 dB.', -30, 0, d => put(Math.round(d * 2) / 2))
       });
       g.append(r); return r;
@@ -1231,7 +1240,7 @@
     const g = grp(body, 'pamięć miksera');
     if (B.ready) bleSnapList();
     for (let n = 0; n < 15; n++) {
-      const r = el('div', 'cfg-row scene-row'), num = el('span', 'chan-num'), nm = el('span', 'chan-label'), box = el('div', 'cfg-keys');
+      const r = el('div', 'cfg-row scene-row'), num = el('span', 'chan-num'), nm = el('span', 'chan-label', { 'data-notr': '' }), box = el('div', 'cfg-keys');
       num.textContent = n + 1;
       const key = (t, f) => { const b = el('button', 'chan-switch small', { type: 'button' }); b.textContent = t; b.addEventListener('click', f); box.append(b); return b; };
       const name = () => ((B.snapshots || [])[n] || '');
@@ -1245,7 +1254,7 @@
       });
       const ren = key('nazwa', () => { if (!need()) return; const t = (prompt('Nowa nazwa sceny', name()) || '').trim().slice(0, 20); if (t) bleSnap(0x32, n, t); });
       const del = key('usuń', () => { if (need() && confirm('Usunąć scenę ' + (n + 1) + ' „' + name() + '” z miksera?')) bleSnap(0x12, n); });
-      subRows.push(() => { const t = name(); nm.textContent = t || 'pusta'; nm.classList.toggle('dim', !t); r.classList.toggle('sel', n === S.scene); [load, ren, del].forEach(b => { b.disabled = !t; }); });
+      subRows.push(() => { const t = name(); nm.textContent = t || tr('pusta'); nm.classList.toggle('dim', !t); r.classList.toggle('sel', n === S.scene); [load, ren, del].forEach(b => { b.disabled = !t; }); });
       r.append(num, nm, box); g.append(r);
     }
     chanRender();
@@ -1352,8 +1361,8 @@
       if (T.q[b] > 0) ctl.append(mkRow('szerokość (Q)', {       // shelving bands report no Q: left as the mixer has them
         get: () => Math.log(qFrom(T.q[b]) / 0.3) / Math.log(10.3 / 0.3),
         set: p => { T.q[b] = qByte(0.3 * Math.pow(10.3 / 0.3, p)); T.send(b); },
-        text: () => String(qFrom(T.q[b]).toFixed(1)).replace('.', ','),
-        ask: () => askNum('Szerokość pasma ' + (b + 1) + ' (Q)', qFrom(T.q[b]).toFixed(1).replace('.', ','), 'Od 0,3 (szeroko) do 10,3 (wąsko).', 0.3, 10.3, d => { T.q[b] = qByte(d); T.send(b); })
+        text: () => String(qFrom(T.q[b]).toFixed(1)).replace('.', window.LANG === 'en' ? '.' : ','),
+        ask: () => askNum('Szerokość pasma ' + (b + 1) + ' (Q)', qFrom(T.q[b]).toFixed(1).replace('.', window.LANG === 'en' ? '.' : ','), 'Od 0,3 (szeroko) do 10,3 (wąsko).', 0.3, 10.3, d => { T.q[b] = qByte(d); T.send(b); })
       }, list));
       const zero = el('button', 'chan-switch small', { type: 'button' }); zero.textContent = 'wyzeruj korektor';
       zero.addEventListener('click', () => { for (let k = 0; k < T.g.length; k++) if (T.g[k]) { T.g[k] = 0; T.send(k); } render(); save(); });
@@ -1629,11 +1638,11 @@
     if (muted.length) why = 'W tym czasie wyciszono kanał: ' + muted.join(', ') + '.';
     else if (inDrop.length && !inSteady.length) why = 'Spadło już na wejściu (' + inDrop.join(', ') + '). Mikser dostał cichszy sygnał: sprawdź źródło, kabel, nadajnik albo zasilanie.';
     else if (inDrop.length) why = 'Spadło na wejściu: ' + inDrop.join(', ') + '. Reszta wejść grała równo. Sprawdź źródło tych kanałów, kabel albo nadajnik.';
-    else if (lim) why = 'Wejścia grały równo, a limiter wyjścia ściszał (próg ' + fmt(S.lim[Math.min(oi, 2)]).replace(',0', '') + ' dB). Podnieś próg limitera.';
+    else if (lim) why = 'Wejścia grały równo, a limiter wyjścia ściszał (próg ' + fmt(S.lim[Math.min(oi, 2)]).replace(/[,.]0$/, '') + ' dB). Podnieś próg limitera.';
     else if (comp.length) why = 'Wejścia grały równo, pracował kompresor kanału: ' + comp.join(', ') + '. Zmniejsz kompresję.';
     else why = 'Wejścia grały równo, limiter i kompresory nie pracowały. Spadek powstał w mikserze za wejściami, czyli na sumie albo na samym wyjściu.';
     const tm = new Date(d.from).toLocaleTimeString('pl-PL');
-    return { t: d.from, text: tm + '  ' + OUTS[oi].key + ': spadek o ' + Math.round(d.base - d.low) + ' dB na ' + dur.toFixed(1).replace('.', ',') + ' s', why };
+    return { t: d.from, text: tm + '  ' + OUTS[oi].key + ': spadek o ' + Math.round(d.base - d.low) + ' dB na ' + dur.toFixed(1).replace('.', window.LANG === 'en' ? '.' : ',') + ' s', why };
   }
   let mCanvas = null, mRows = null, mEv = null, mInfo = null;
   function openMeasure() {
@@ -1809,7 +1818,7 @@
     if (S.view === 'meters' && !big) {
       big = el('section', 'big', { id: 'big', 'aria-label': 'Wskaźniki poziomu' });
       CHANNELS.forEach((c, i) => {
-        const col = el('div', 'big-col'), bar = el('div', 'big-bar'), val = el('div', 'big-val'), name = el('div', 'big-name');
+        const col = el('div', 'big-col'), bar = el('div', 'big-bar'), val = el('div', 'big-val'), name = el('div', 'big-name', { 'data-notr': '' });
         for (let k = 0; k < SEG; k++) bar.appendChild(el('span'));
         const wrap = el('div', 'big-wrap'), mark = el('span', 'big-mark');
         wrap.append(bar, mark);
@@ -1851,7 +1860,7 @@
       o.mark.style.bottom = S.levels[S.bus][i] / 127 * 100 + '%';
       const dragging = now - o.dragAt < 1200;
       o.val.classList.toggle('set', dragging);
-      o.val.textContent = dragging ? levelDb(S.levels[S.bus][i]) : S.mutes[i] ? 'mute' : live ? (db < -70 ? '-∞' : fmt(Math.round(db))) .replace(',0', '') : levelDb(S.levels[S.bus][i]).replace(/,\d$/, '');
+      o.val.textContent = dragging ? levelDb(S.levels[S.bus][i]) : S.mutes[i] ? 'mute' : live ? (db < -70 ? '-∞' : fmt(Math.round(db))) .replace(/[,.]0$/, '') : levelDb(S.levels[S.bus][i]).replace(/,\d$/, '');
       o.name.textContent = c.master ? BUSES[S.bus].short : S.names[i];
       o.name.classList.toggle('sel', i === S.sel);
     });
@@ -2011,7 +2020,7 @@
     toast('„' + p.name + '” na kanale ' + S.names[i] + (B.ready ? '' : ' (wyślę po połączeniu: menu, Wyślij wszystko)'));
   }
   const presetSum = p => [p.hpf !== undefined ? 'filtr ' + (p.hpf <= 20 ? 'wył.' : p.hpf + ' Hz') : '',
-    p.eq ? 'EQ ' + p.eq.map(g => fmt(g).replace(',0', '')).join(' ') : '', p.comp !== undefined ? 'komp. ' + p.comp + '%' : ''].filter(Boolean).join(' · ');
+    p.eq ? 'EQ ' + p.eq.map(g => fmt(g).replace(/[,.]0$/, '')).join(' ') : '', p.comp !== undefined ? 'komp. ' + p.comp + '%' : ''].filter(Boolean).join(' · ');
   const userPresets = () => { if (!Array.isArray(S.presets)) S.presets = []; return S.presets; };
   function presetExport() {
     return JSON.stringify({ flow8: 'presets', v: 1, app: APP_VERSION, date: new Date().toISOString().slice(0, 10), presets: userPresets() }, null, 1);
@@ -2239,7 +2248,7 @@
       if (!songs.length) { const n = el('div', 'cfg-note'); n.textContent = 'Pusta setlista. Ustaw tempo i efekty, potem „dodaj piosenkę”.'; listBox.append(n); }
       songs.forEach((s, k) => {
         const r = el('div', 'cfg-row preset-row song-row'), num = el('span', 'chan-num'), l = el('button', 'chan-label song-pick', { type: 'button' }), keys = el('div', 'cfg-keys');
-        num.textContent = k + 1; l.textContent = s.name;
+        num.textContent = k + 1; const sn = el('span', '', { 'data-notr': '' }); sn.textContent = s.name; l.append(sn);
         const sm = el('span', 'preset-sum'); sm.textContent = songSum(s); l.append(sm);
         l.addEventListener('click', () => songGo(k));
         const ed = el('button', 'chan-switch small', { type: 'button' }); ed.textContent = 'edytuj';
@@ -2255,7 +2264,7 @@
     const chipsPaint = () => {
       chips.textContent = '';
       sets().forEach((x, k) => {
-        const b = el('button', 'chan-switch small', { type: 'button', 'aria-pressed': k === S.setI ? 'true' : 'false' }); b.textContent = x.name;
+        const b = el('button', 'chan-switch small', { type: 'button', 'aria-pressed': k === S.setI ? 'true' : 'false', 'data-notr': '' }); b.textContent = x.name;
         b.addEventListener('click', () => { S.setI = k; S.songI = null; save(); openSetlist(); });
         chips.append(b);
       });
@@ -2519,6 +2528,7 @@
   metroBuild();
   lockBuild();
   midiInit();
+  trStart();
   render();
   if (S.view) setView(S.view, true);
   requestAnimationFrame(() => scrollToSel(false));

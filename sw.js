@@ -1,9 +1,9 @@
 // Offline cache for FLOW 8 Control. Bump VERSION when files change.
-const VERSION = 'flow8-v70';
+const VERSION = 'flow8-v71';
 const FONTS = ['doto-latin-700', 'doto-latin-900', 'doto-latin-ext-700', 'doto-latin-ext-900',
   'inter-tight-latin-400', 'inter-tight-latin-500', 'inter-tight-latin-600', 'inter-tight-latin-700',
   'inter-tight-latin-ext-400', 'inter-tight-latin-ext-500', 'inter-tight-latin-ext-600', 'inter-tight-latin-ext-700'].map(f => 'fonts/' + f + '-normal.woff2');
-const FILES = ['./', 'index.html', 'app.css', 'fonts.css', 'app.js', 'manifest.webmanifest', 'icon.svg'].concat(FONTS);
+const FILES = ['./', 'index.html', 'app.css', 'fonts.css', 'i18n.js', 'app.js', 'manifest.webmanifest', 'icon.svg'].concat(FONTS);
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
 });

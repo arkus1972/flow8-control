@@ -4,7 +4,7 @@
   "private": true,
   "description": "FLOW 8 Control: web app + Android wrapper (Capacitor) with a native Bluetooth bridge",
   "scripts": {
-    "www": "rm -rf www && mkdir www && cp -r index.html app.css fonts.css fonts app.js sw.js manifest.webmanifest icon.svg www/"
+    "www": "rm -rf www && mkdir www && cp -r index.html app.css fonts.css fonts i18n.js app.js sw.js manifest.webmanifest icon.svg www/"
   },
   "dependencies": {
     "@capacitor/android": "6.2.3",
