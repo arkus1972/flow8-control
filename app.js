@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.64'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.65'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -30,7 +30,7 @@
     { id: 'fx2',  label: 'efekt 2',   short: 'fx 2',  midi: 12, sendCC: 17, dst: 0x0d }
   ];
   // one mute icon for every channel: headphones, crossed out (and red) when muted
-  const MUTE_ICON = '<svg viewBox="0 0 30 30" aria-hidden="true"><path d="M5.5 19v-3.5a9.5 9.5 0 0 1 19 0V19M9.5 17v8H8a3 3 0 0 1-3-3v-2a3 3 0 0 1 3-3zM20.5 17v8H22a3 3 0 0 0 3-3v-2a3 3 0 0 0-3-3z"/><path class="slash" d="M4 4l22 22"/></svg>';
+  const MUTE_ICON = '<svg class="dotted" viewBox="0 0 31.0 28.8" aria-hidden="true"><circle cx="11.0" cy="4.4" r="0.85"/><circle cx="13.2" cy="4.4" r="0.85"/><circle cx="15.4" cy="4.4" r="0.85"/><circle cx="17.6" cy="4.4" r="0.85"/><circle cx="19.8" cy="4.4" r="0.85"/><circle cx="6.6" cy="6.6" r="0.85"/><circle cx="8.8" cy="6.6" r="0.85"/><circle cx="22.0" cy="6.6" r="0.85"/><circle cx="24.2" cy="6.6" r="0.85"/><circle cx="4.4" cy="8.8" r="0.85"/><circle cx="26.4" cy="8.8" r="0.85"/><circle cx="2.2" cy="11.0" r="0.85"/><circle cx="28.6" cy="11.0" r="0.85"/><circle cx="2.2" cy="13.2" r="0.85"/><circle cx="28.6" cy="13.2" r="0.85"/><circle cx="2.2" cy="15.4" r="0.85"/><circle cx="28.6" cy="15.4" r="0.85"/><circle cx="2.2" cy="17.6" r="0.85"/><circle cx="4.4" cy="17.6" r="0.85"/><circle cx="6.6" cy="17.6" r="0.85"/><circle cx="24.2" cy="17.6" r="0.85"/><circle cx="26.4" cy="17.6" r="0.85"/><circle cx="28.6" cy="17.6" r="0.85"/><circle cx="2.2" cy="19.8" r="0.85"/><circle cx="4.4" cy="19.8" r="0.85"/><circle cx="6.6" cy="19.8" r="0.85"/><circle cx="24.2" cy="19.8" r="0.85"/><circle cx="26.4" cy="19.8" r="0.85"/><circle cx="28.6" cy="19.8" r="0.85"/><circle cx="2.2" cy="22.0" r="0.85"/><circle cx="4.4" cy="22.0" r="0.85"/><circle cx="6.6" cy="22.0" r="0.85"/><circle cx="24.2" cy="22.0" r="0.85"/><circle cx="26.4" cy="22.0" r="0.85"/><circle cx="28.6" cy="22.0" r="0.85"/><circle cx="2.2" cy="24.2" r="0.85"/><circle cx="4.4" cy="24.2" r="0.85"/><circle cx="6.6" cy="24.2" r="0.85"/><circle cx="24.2" cy="24.2" r="0.85"/><circle cx="26.4" cy="24.2" r="0.85"/><circle cx="28.6" cy="24.2" r="0.85"/><circle cx="4.4" cy="26.4" r="0.85"/><circle cx="6.6" cy="26.4" r="0.85"/><circle cx="24.2" cy="26.4" r="0.85"/><circle cx="26.4" cy="26.4" r="0.85"/><g class="slash"><circle cx="2.2" cy="2.2" r="1.0"/><circle cx="4.4" cy="4.2" r="1.0"/><circle cx="6.6" cy="6.2" r="1.0"/><circle cx="8.8" cy="8.2" r="1.0"/><circle cx="11.0" cy="10.3" r="1.0"/><circle cx="13.2" cy="12.3" r="1.0"/><circle cx="15.4" cy="14.3" r="1.0"/><circle cx="17.6" cy="16.3" r="1.0"/><circle cx="19.8" cy="18.3" r="1.0"/><circle cx="22.0" cy="20.4" r="1.0"/><circle cx="24.2" cy="22.4" r="1.0"/><circle cx="26.4" cy="24.4" r="1.0"/><circle cx="28.6" cy="26.4" r="1.0"/></g></svg>';   // headphones drawn from dots, like the display font
   const ROWS = 15;   // dots per meter column on the display
   const CC = { level: 7, mute: 5, solo: 6, gain: 8 };
   const GLOBAL_CH = 16;
@@ -1868,6 +1868,13 @@
   }
 
   // ---------- Render ----------
+  // shrink a one-line label until it fits its box (the display is narrow in portrait)
+  function fitText(node) {
+    node.style.fontSize = '';
+    const max = parseFloat(getComputedStyle(node).fontSize) || 16;
+    let f = max;
+    while (node.scrollWidth > node.clientWidth + 1 && f > 10) { f -= 1; node.style.fontSize = f + 'px'; }
+  }
   function render() {
     document.documentElement.dataset.theme = S.theme;
     const meta = document.querySelector('meta[name="theme-color"]');
@@ -1921,7 +1928,7 @@
     $('#sel-level').textContent = (sc.master ? 'poziom ' : (S.bus === 0 ? 'poziom ' : 'wysyłka ')) + levelDb(lv[S.sel]) + ' dB';
     chanRender(); bigRender();
     $('#sel-gain').textContent = (sc.gain ? 'gain ' + gainDb(S.gains[S.sel]) + ' dB  ' : '') + (panOk(S.sel) ? 'pan ' + panText(S.pans[S.sel]) : '');
-    $('#bus-label').textContent = 'miks: ' + bus.label;
+    $('#bus-label').textContent = 'miks: ' + bus.label; fitText($('#bus-label'));
 
     [...document.querySelectorAll('.scene')].forEach((b, n) => b.setAttribute('aria-pressed', n === S.scene ? 'true' : 'false'));
     const buses = $('#buses');
@@ -2507,6 +2514,7 @@
     p.setAttribute('aria-pressed', M.running ? 'true' : 'false');
   }
 
+  window.addEventListener('resize', () => fitText($('#bus-label')));
   build();
   metroBuild();
   lockBuild();

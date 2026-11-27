@@ -876,3 +876,7 @@ html.v-meters .big { display: grid; grid-template-columns: repeat(8, minmax(0, 1
   .conn-menu, .conn-menu[id] { width: 440px; grid-template-columns: 1fr 1fr; align-items: start; }
   .conn-menu .conn-status { grid-column: 1 / -1; }
 }
+/* dotted headphones on the mute key */
+.key svg.dotted { fill: currentColor; stroke: none; width: 54%; max-width: 40px; height: auto; }
+.readout-bus { max-width: 100%; overflow: hidden; }
+@media (orientation: portrait) { .readout-top { max-width: 100%; } .readout-bus { align-self: stretch; } }
