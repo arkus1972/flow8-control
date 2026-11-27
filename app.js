@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.63'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.64'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -785,6 +785,13 @@
       $('#conn-usb').hidden = !!NATIVE;
       menu.hidden = !menu.hidden; cbtn.setAttribute('aria-expanded', menu.hidden ? 'false' : 'true');
     });
+    // four containers: opening one closes the others
+    menu.querySelectorAll('.menu-sec').forEach(h => h.addEventListener('click', e => {
+      e.stopPropagation();
+      const open = h.getAttribute('aria-expanded') !== 'true';
+      menu.querySelectorAll('.menu-sec').forEach(x => { x.setAttribute('aria-expanded', 'false'); x.nextElementSibling.hidden = true; });
+      h.setAttribute('aria-expanded', open ? 'true' : 'false'); h.nextElementSibling.hidden = !open;
+    }));
     $('#conn-ble').addEventListener('click', () => { closeMenu(); if (B.ready && confirmDisconnect()) return; bleConnect(); });
     $('#conn-usb').addEventListener('click', () => { closeMenu(); connect(); });
     document.addEventListener('click', e => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(); });

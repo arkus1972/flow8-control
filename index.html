@@ -20,21 +20,37 @@
         <div class="conn">
           <button class="pill dot" id="connect" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="conn-menu"><span class="led" id="conn-led"></span></button>
           <div class="conn-menu" id="conn-menu" hidden>
-            <div class="menu-sec">połączenie</div>
             <div class="conn-status" id="conn-label">Połącz z mikserem</div>
-            <button class="key wide" id="conn-ble" type="button">Połącz</button>
-            <button class="key wide" id="conn-usb" type="button">Kabel USB</button>
-            <div class="menu-sec">pamięć</div>
-            <button class="key wide" id="open-scenes" type="button">Sceny</button>
-            <button class="key wide" id="open-presets" type="button">Presety</button>
-            <button class="key wide" id="open-setlist" type="button">Setlista</button>
-            <div class="menu-sec">narzędzia</div>
-            <button class="key wide" id="lock" type="button">Zablokuj ekran</button>
-            <button class="key wide" id="sync" type="button">Wyślij do miksera</button>
-            <button class="key wide" id="open-measure" type="button">Pomiar</button>
-            <div class="menu-sec">ustawienia</div>
-            <button class="key wide" id="open-setup" type="button">Mikser</button>
-            <button class="key wide" id="open-app" type="button">Aplikacja</button>
+            <div class="menu-grp">
+              <button class="key wide menu-sec" type="button" aria-expanded="false">Połączenie</button>
+              <div class="menu-items" hidden>
+                <button class="key wide" id="conn-ble" type="button">Połącz</button>
+                <button class="key wide" id="conn-usb" type="button">Kabel USB</button>
+              </div>
+            </div>
+            <div class="menu-grp">
+              <button class="key wide menu-sec" type="button" aria-expanded="false">Pamięć</button>
+              <div class="menu-items" hidden>
+                <button class="key wide" id="open-scenes" type="button">Sceny</button>
+                <button class="key wide" id="open-presets" type="button">Presety</button>
+                <button class="key wide" id="open-setlist" type="button">Setlista</button>
+              </div>
+            </div>
+            <div class="menu-grp">
+              <button class="key wide menu-sec" type="button" aria-expanded="false">Narzędzia</button>
+              <div class="menu-items" hidden>
+                <button class="key wide" id="lock" type="button">Zablokuj ekran</button>
+                <button class="key wide" id="sync" type="button">Wyślij do miksera</button>
+                <button class="key wide" id="open-measure" type="button">Pomiar</button>
+              </div>
+            </div>
+            <div class="menu-grp">
+              <button class="key wide menu-sec" type="button" aria-expanded="false">Ustawienia</button>
+              <div class="menu-items" hidden>
+                <button class="key wide" id="open-setup" type="button">Mikser</button>
+                <button class="key wide" id="open-app" type="button">Aplikacja</button>
+              </div>
+            </div>
           </div>
         </div>
         <span class="readout-bus" id="bus-label">sala</span>
