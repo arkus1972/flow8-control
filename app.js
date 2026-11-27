@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.62'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.63'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -789,6 +789,8 @@
     $('#conn-usb').addEventListener('click', () => { closeMenu(); connect(); });
     document.addEventListener('click', e => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(); });
     $('#open-setup').addEventListener('click', () => { closeMenu(); openSetup(); });
+    $('#sync').addEventListener('click', () => { closeMenu(); syncAll(); });
+    $('#open-measure').addEventListener('click', () => { closeMenu(); openMeasure(); });
     $('#open-scenes').addEventListener('click', () => { closeMenu(); openScenes(); });
     $('#sel-level').addEventListener('click', () => { if (!locked(S.sel)) askLevel(S.sel); });
     $('#sel-gain').addEventListener('click', () => { if (!locked(S.sel)) CHANNELS[S.sel].gain ? askGain(S.sel) : askPan(S.sel); });
@@ -1160,12 +1162,7 @@
   function openSetup() {
     const body = subPage('ustawienia', 'mikser');
     const row = (label, o) => mkRow(label, o, subRows);
-    let g = grp(body, 'narzędzia');
-    const tk = el('div', 'cfg-keys'); tk.style.justifyContent = 'flex-start';
-    [['wyślij wszystko do miksera', syncAll], ['pomiar przerw w dźwięku', () => openMeasure()]].forEach(([t, f]) => { const b = el('button', 'chan-switch small', { type: 'button' }); b.textContent = t; b.addEventListener('click', f); tk.append(b); });
-    g.append(tk);
-    const tn = el('div', 'cfg-note'); tn.textContent = 'Aplikacja po połączeniu sama odczytuje ustawienia z miksera. „Wyślij wszystko” robi odwrotnie: nadpisuje mikser tym, co jest w aplikacji.'; g.append(tn);
-    g = grp(body, 'wyjścia');
+    let g = grp(body, 'wyjścia');
     // FLOW Mix shows one limiter for both monitors while they are linked as a stereo pair
     const limRow = (label, list) => {
       const bi = list[0];
