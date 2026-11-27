@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.66'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.67'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -827,6 +827,30 @@
       }, 60);
     }, { passive: true });
     window.addEventListener('resize', () => { if (portrait()) scrollToSel(false); });
+    // Portrait: a sideways swipe changes the channel wherever it starts (knob, fader, keys), not only on empty
+    // space. It is caught on the way down (capture), so once it counts as a swipe the control under the finger
+    // gets no more moves, and the tap that ends it does not press a key. Where the browser scrolls by itself
+    // it cancels the pointer, and this stays out of the way.
+    let sw = null, noClickUntil = 0;
+    const swOk = () => portrait() && S.view !== 'meters' && strips.scrollWidth > strips.clientWidth + 10;
+    strips.addEventListener('pointerdown', e => {
+      sw = null;
+      if (!swOk() || e.pointerType === 'mouse' || e.target.closest('.s-pan')) return;
+      sw = { id: e.pointerId, x: e.clientX, y: e.clientY, done: false };
+    }, true);
+    strips.addEventListener('pointermove', e => {
+      if (!sw || e.pointerId !== sw.id) return;
+      if (sw.done) { e.stopPropagation(); return; }
+      const dx = e.clientX - sw.x, dy = e.clientY - sw.y;
+      if (Math.abs(dy) > 40 && Math.abs(dy) > Math.abs(dx)) { sw = null; return; }    // a fader or knob move, not a swipe
+      if (Math.abs(dx) > 36 && Math.abs(dx) > 2 * Math.abs(dy)) {
+        sw.done = true; e.stopPropagation(); noClickUntil = performance.now() + 500;
+        const k = Math.max(0, Math.min(CHANNELS.length - 1, S.sel + (dx < 0 ? 1 : -1)));
+        if (k !== S.sel) select(k, true);
+      }
+    }, true);
+    ['pointerup', 'pointercancel'].forEach(t => strips.addEventListener(t, e => { if (sw && e.pointerId === sw.id) { if (sw.done) e.stopPropagation(); sw = null; } }, true));
+    strips.addEventListener('click', e => { if (performance.now() < noClickUntil) { e.stopPropagation(); e.preventDefault(); } }, true);
   }
 
   function confirmDisconnect() {
