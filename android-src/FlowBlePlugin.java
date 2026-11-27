@@ -217,6 +217,131 @@ public class FlowBlePlugin extends Plugin {
         call.resolve();
     }
 
+    // ----- MIDI controllers (song changes): USB devices appear by themselves, Bluetooth MIDI is found by its service -----
+    private static final UUID MIDI_SVC = UUID.fromString("03b80e5a-ede8-4b33-a751-6ce34ec4c700");
+    private Object midi;                                   // Midi helper, only on Android 6+
+    private ScanCallback midiScanCb;
+
+    @PluginMethod
+    public void midiStart(PluginCall call) {
+        if (Build.VERSION.SDK_INT < 23) { call.reject("MIDI wymaga Androida 6"); return; }
+        try {
+            if (midi == null) midi = new Midi(this);
+            ((Midi) midi).start();
+            call.resolve();
+        } catch (Exception e) { call.reject("MIDI niedostępne: " + e.getMessage()); }
+    }
+
+    void midiEvent(String kind, JSObject o) { notifyListeners(kind, o); }
+
+    @SuppressLint("MissingPermission")
+    @PluginMethod
+    public void midiScan(PluginCall call) {
+        try {
+            BluetoothManager bm = (BluetoothManager) getContext().getSystemService(Context.BLUETOOTH_SERVICE);
+            BluetoothAdapter ad = bm == null ? null : bm.getAdapter();
+            BluetoothLeScanner sc = ad == null ? null : ad.getBluetoothLeScanner();
+            if (sc == null) { call.reject("Włącz Bluetooth w telefonie"); return; }
+            if (midiScanCb != null) try { sc.stopScan(midiScanCb); } catch (Exception e) { }
+            final java.util.HashSet<String> seen = new java.util.HashSet<>();
+            midiScanCb = new ScanCallback() {
+                @Override
+                public void onScanResult(int type, ScanResult r) {
+                    BluetoothDevice d = r.getDevice();
+                    boolean isMidi = r.getScanRecord() != null && r.getScanRecord().getServiceUuids() != null
+                        && r.getScanRecord().getServiceUuids().contains(new android.os.ParcelUuid(MIDI_SVC));
+                    if (!isMidi || !seen.add(d.getAddress())) return;
+                    JSObject o = new JSObject();
+                    o.put("address", d.getAddress());
+                    String n = r.getScanRecord().getDeviceName();
+                    o.put("name", n != null ? n : d.getAddress());
+                    notifyListeners("midiFound", o);
+                }
+            };
+            sc.startScan(null, new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), midiScanCb);
+            final ScanCallback mine = midiScanCb;
+            main.postDelayed(() -> { try { sc.stopScan(mine); } catch (Exception e) { } if (midiScanCb == mine) midiScanCb = null; notifyListeners("midiScanEnd", new JSObject()); }, 8000);
+            call.resolve();
+        } catch (Exception e) { call.reject("Nie mogę szukać: " + e.getMessage()); }
+    }
+
+    @PluginMethod
+    public void midiBle(PluginCall call) {
+        if (Build.VERSION.SDK_INT < 23) { call.reject("MIDI wymaga Androida 6"); return; }
+        try {
+            if (midi == null) midi = new Midi(this);
+            BluetoothManager bm = (BluetoothManager) getContext().getSystemService(Context.BLUETOOTH_SERVICE);
+            ((Midi) midi).openBle(bm.getAdapter().getRemoteDevice(call.getString("address")));
+            call.resolve();
+        } catch (Exception e) { call.reject("Nie mogę połączyć: " + e.getMessage()); }
+    }
+
+    @android.annotation.TargetApi(23)
+    static class Midi {
+        private final FlowBlePlugin p;
+        private final android.media.midi.MidiManager mm;
+        private final java.util.HashMap<String, android.media.midi.MidiDevice> open = new java.util.HashMap<>();
+        private boolean listening;
+        Midi(FlowBlePlugin p) {
+            this.p = p;
+            mm = (android.media.midi.MidiManager) p.getContext().getSystemService(Context.MIDI_SERVICE);
+            if (mm == null) throw new IllegalStateException("brak MIDI w telefonie");
+        }
+        private static String key(android.media.midi.MidiDeviceInfo info) {
+            android.os.Bundle b = info.getProperties();
+            String n = b.getString(android.media.midi.MidiDeviceInfo.PROPERTY_NAME);
+            return info.getId() + ":" + (n == null ? "" : n);
+        }
+        void start() {
+            for (android.media.midi.MidiDeviceInfo info : mm.getDevices()) openInfo(info);
+            if (!listening) {
+                listening = true;
+                mm.registerDeviceCallback(new android.media.midi.MidiManager.DeviceCallback() {
+                    @Override public void onDeviceAdded(android.media.midi.MidiDeviceInfo info) { openInfo(info); }
+                    @Override public void onDeviceRemoved(android.media.midi.MidiDeviceInfo info) {
+                        android.media.midi.MidiDevice d = open.remove(key(info));
+                        if (d != null) try { d.close(); } catch (Exception e) { }
+                        devices();
+                    }
+                }, new Handler(Looper.getMainLooper()));
+            }
+            devices();
+        }
+        void openInfo(android.media.midi.MidiDeviceInfo info) {
+            if (open.containsKey(key(info)) || info.getOutputPortCount() == 0) return;
+            mm.openDevice(info, d -> attach(key(info), d), new Handler(Looper.getMainLooper()));
+        }
+        void openBle(BluetoothDevice bd) {
+            mm.openBluetoothDevice(bd, d -> { if (d != null) attach("ble:" + bd.getAddress() + ":" + d.getInfo().getProperties().getString(android.media.midi.MidiDeviceInfo.PROPERTY_NAME), d); }, new Handler(Looper.getMainLooper()));
+        }
+        void attach(String k, android.media.midi.MidiDevice d) {
+            if (d == null) return;
+            open.put(k, d);
+            for (android.media.midi.MidiDeviceInfo.PortInfo port : d.getInfo().getPorts()) {
+                if (port.getType() != android.media.midi.MidiDeviceInfo.PortInfo.TYPE_OUTPUT) continue;
+                android.media.midi.MidiOutputPort out = d.openOutputPort(port.getPortNumber());
+                if (out == null) continue;
+                out.connect(new android.media.midi.MidiReceiver() {
+                    @Override public void onSend(byte[] msg, int off, int count, long ts) {
+                        JSArray a = new JSArray();
+                        for (int i = 0; i < count; i++) a.put(msg[off + i] & 255);
+                        JSObject o = new JSObject();
+                        o.put("data", a);
+                        p.midiEvent("midi", o);
+                    }
+                });
+            }
+            devices();
+        }
+        void devices() {
+            JSArray a = new JSArray();
+            for (String k : open.keySet()) a.put(k.substring(k.lastIndexOf(':') + 1));
+            JSObject o = new JSObject();
+            o.put("names", a);
+            p.midiEvent("midiDevices", o);
+        }
+    }
+
     // send text (a preset backup) to another app: Drive, e-mail, a messenger, Files
     @PluginMethod
     public void share(PluginCall call) {

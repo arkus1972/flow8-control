@@ -22,6 +22,7 @@ perms = '''
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
+    <uses-feature android:name="android.software.midi" android:required="false" />
 '''
 if 'BLUETOOTH_CONNECT' not in m:
     m = m.replace('<application', perms + '\n    <application', 1)

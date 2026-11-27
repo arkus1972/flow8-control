@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.60'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.61'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -578,8 +578,8 @@
     }
     try {
       access = await navigator.requestMIDIAccess({ sysex: false });
-      access.onstatechange = pickOutput;
-      pickOutput();
+      access.onstatechange = () => { pickOutput(); webMidiInputs(); };
+      pickOutput(); webMidiInputs();
     } catch (e) {
       toast('Brak zgody na MIDI. Zezwól w ustawieniach strony i spróbuj ponownie.');
       setConn('demo');
@@ -800,6 +800,7 @@
     $('#open-app').addEventListener('click', () => { closeMenu(); openApp(); });
     $('#open-measure').addEventListener('click', () => { closeMenu(); openMeasure(); });
     $('#open-presets').addEventListener('click', () => { closeMenu(); openPresets(); });
+    $('#open-setlist').addEventListener('click', () => { closeMenu(); openSetlist(); });
     onHold($('#sel-name'), () => { if (!CHANNELS[S.sel].master) rename(S.sel); });
     $('#view').addEventListener('click', () => setView(VIEWS[(VIEWS.indexOf(S.view || '') + 1) % VIEWS.length]));
     $('#theme').addEventListener('click', () => { S.theme = S.theme === 'dark' ? 'light' : 'dark'; render(); save(); });
@@ -2074,9 +2075,7 @@
     const io = el('div', 'preset-io');
     const key = (t, f) => { const b = el('button', 'chan-switch small', { type: 'button' }); b.textContent = t; b.addEventListener('click', f); io.append(b); };
     key(NATIVE ? 'wyślij / zapisz' : 'pobierz plik', () => {
-      const t = presetExport(), name = 'flow8-presety-' + new Date().toISOString().slice(0, 10) + '.json';
-      if (NATIVE && NATIVE.share) { NATIVE.share({ title: name, text: t }).catch(() => toast('Nie udało się. Użyj „kopiuj”.')); return; }
-      const a = el('a', '', { href: URL.createObjectURL(new Blob([t], { type: 'application/json' })), download: name }); document.body.append(a); a.click(); a.remove();
+      shareText('flow8-presety-' + new Date().toISOString().slice(0, 10) + '.json', presetExport());
     });
     key('kopiuj tekst', () => { const t = presetExport(); (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => toast('Presety skopiowane do schowka'), () => toast('Schowek niedostępny')); });
     const file = el('input', '', { type: 'file', accept: '.json,application/json,text/plain', hidden: '' });
@@ -2092,6 +2091,270 @@
     g.append(io, file);
     const n2 = el('div', 'cfg-note'); n2.textContent = 'Kopia to plik tekstowy z Twoimi presetami. Wyślij go sobie (Dysk, e-mail, komunikator). Wczytanie dodaje presety, a te o tej samej nazwie zastępuje.'; g.append(n2);
     chanRender();
+  }
+
+  // ---------- Setlists: songs with tempo, effects, scene and notes, switched by MIDI controllers or a page-turner pedal ----------
+  // A song is sent to the mixer in this order: scene (if set), then after the scene has loaded the two FX programs
+  // with their parameters and routing, then the tempo (metronome + FX tempo).
+  const sets = () => { if (!Array.isArray(S.sets) || !S.sets.length) S.sets = [{ name: 'Setlista 1', songs: [] }]; if (!(S.setI < S.sets.length)) S.setI = 0; return S.sets; };
+  const curSet = () => sets()[S.setI];
+  const fxName = f => { const t = FX_PRESETS[f.n] && FX_PRESETS[f.n][f.preset]; return t ? t.name : '?'; };
+  const songOf = name => ({ name, bpm: M.bpm, beats: M.beats, fx: S.fx.map((f, n) => ({ n, preset: f.preset, v1: f.v1, v2: f.v2, v3: f.v3, en: f.en })), scene: null, tempoFx: S.metroFx !== false, notes: '' });
+  const songSum = s => [s.bpm + ' bpm' + (s.beats !== 4 ? ' ' + s.beats + '/4' : ''), s.fx ? 'FX ' + s.fx.map(fxName).join(' / ') : '', s.scene !== null && s.scene !== undefined ? 'scena ' + (s.scene + 1) : ''].filter(Boolean).join(' · ');
+  function songClean(x) {
+    if (!x || typeof x !== 'object' || typeof x.name !== 'string' || !x.name.trim()) return null;
+    const n = (v, lo, hi, d) => typeof v === 'number' && isFinite(v) ? Math.round(within(v, lo, hi)) : d;
+    const s = { name: x.name.trim().slice(0, 40), bpm: n(x.bpm, 40, 240, 120), beats: [2, 3, 4, 6].includes(x.beats) ? x.beats : 4,
+      scene: x.scene === null || x.scene === undefined ? null : n(x.scene, 0, 14, null), tempoFx: x.tempoFx !== false,
+      notes: typeof x.notes === 'string' ? x.notes.slice(0, 400) : '' };
+    if (Array.isArray(x.fx) && x.fx.length === 2) s.fx = x.fx.map((f, k) => ({ n: k, preset: n(f && f.preset, 0, 15, 0), v1: n(f && f.v1, 0, 100, 50), v2: n(f && f.v2, 0, 1, 0), v3: n(f && f.v3, 0, 255, 0), en: n(f && f.en, 0, 15, 0) }));
+    return s;
+  }
+  let songTimer = 0;
+  function songGo(k, quiet) {
+    const set = curSet(), s = set.songs[k]; if (!s) return;
+    S.songI = k; save();
+    clearTimeout(songTimer);
+    const scene = s.scene !== null && s.scene !== undefined;
+    if (scene) { S.scene = s.scene; if (B.ready) bleScene(s.scene); else if (out) pc(GLOBAL_CH, s.scene + 1); }
+    const rest = () => {
+      if (s.fx) s.fx.forEach((f, n) => {
+        Object.assign(S.fx[n], { preset: f.preset, v1: f.v1, v2: f.v2, v3: f.v3, en: f.en });
+        if (B.ready) { bleQueue('xp' + n, 0x31, [0x0c + n, f.preset]); setTimeout(() => bleFxSetup(n), 300); }
+        else if (out) pc(13 + n, f.preset + 1);
+      });
+      M.beats = s.beats; S.beats = s.beats; setBpm(s.bpm);
+      if (s.tempoFx && B.ready && S.tempo !== s.bpm) { S.tempo = s.bpm; bleTempo(); }
+      render(); chanRender(); save();
+    };
+    if (scene && (B.ready || out)) songTimer = setTimeout(rest, 900); else rest();   // the scene brings its own FX: ours go on top
+    if (!quiet) toast('▶ ' + (k + 1) + '. ' + s.name + '  ·  ' + s.bpm + ' bpm');
+    bump(true); setlistPaint();
+  }
+  function songStep(d) {
+    const n = curSet().songs.length; if (!n) { toast('Setlista jest pusta.'); return; }
+    const k = S.songI === undefined || S.songI === null || S.songI >= n ? (d > 0 ? 0 : n - 1) : within(S.songI + d, 0, n - 1);
+    if (k === S.songI && S.songI !== undefined) { toast(d > 0 ? 'To ostatnia piosenka.' : 'To pierwsza piosenka.'); return; }
+    songGo(k);
+  }
+  // ----- control: learned MIDI messages and keys; program change N picks song N -----
+  let learning = null;
+  const midiSig = d => {
+    const t = d[0] & 0xf0, ch = (d[0] & 15) + 1;
+    if (t === 0x90 && d[2] > 0) return 'n' + ch + ':' + d[1];
+    if (t === 0xb0 && d[2] > 0) return 'c' + ch + ':' + d[1];
+    if (t === 0xc0) return 'p' + ch + ':' + d[1];
+    return null;
+  };
+  const sigText = g => !g ? 'brak' : g[0] === 'k' ? 'klawisz ' + g.slice(2) : (g[0] === 'n' ? 'nuta ' : g[0] === 'c' ? 'CC ' : 'program ') + g.slice(1).split(':')[1] + ' (kanał ' + g.slice(1).split(':')[0] + ')';
+  function controlIn(sig, raw) {
+    if (!sig) return false;
+    if (learning) { if (!S.ctl) S.ctl = {}; S.ctl[learning] = sig; toast('Przypisano: ' + sigText(sig)); learning = null; save(); chanRender(); return true; }
+    const c = S.ctl || {};
+    if (sig === c.next) { songStep(1); return true; }
+    if (sig === c.prev) { songStep(-1); return true; }
+    if (raw && (raw[0] & 0xf0) === 0xc0 && S.pcSong !== false) { const k = raw[1]; if (k < curSet().songs.length) songGo(k); else toast('Brak piosenki nr ' + (k + 1)); return true; }
+    return false;
+  }
+  function midiIn(d) {
+    if (!d || !d.length || d[0] < 0x80) return;
+    if ((d[0] & 0xf0) === 0x80 || ((d[0] & 0xf0) === 0x90 && d[2] === 0) || ((d[0] & 0xf0) === 0xb0 && d[2] === 0)) return;   // releases
+    controlIn(midiSig(d), d);
+  }
+  const PAGE_NEXT = ['PageDown', 'ArrowRight', 'ArrowDown', 'Space'], PAGE_PREV = ['PageUp', 'ArrowLeft', 'ArrowUp'];
+  document.addEventListener('keydown', e => {
+    const t = e.target, typing = t && (t.tagName === 'INPUT' && t.type !== 'range' || t.tagName === 'TEXTAREA');
+    if (typing || e.repeat || document.getElementById('ask')) return;
+    const sig = 'k:' + e.code;
+    if (learning) { e.preventDefault(); controlIn(sig); return; }
+    if (controlIn(sig)) { e.preventDefault(); return; }
+    if (S.pageKeys !== false && curSet().songs.length) {
+      if (PAGE_NEXT.includes(e.code)) { e.preventDefault(); songStep(1); }
+      else if (PAGE_PREV.includes(e.code)) { e.preventDefault(); songStep(-1); }
+    }
+  }, true);
+  const MIDI = { names: [], found: [], scanning: false };
+  function midiInit() {
+    if (NATIVE && NATIVE.midiStart) {
+      try {
+        NATIVE.addListener('midi', e => midiIn(e.data));
+        NATIVE.addListener('midiDevices', e => { MIDI.names = e.names || []; chanRender(); });
+        NATIVE.addListener('midiFound', e => { if (!MIDI.found.some(f => f.address === e.address)) MIDI.found.push(e); chanRender(); });
+        NATIVE.addListener('midiScanEnd', () => { MIDI.scanning = false; chanRender(); });
+        NATIVE.midiStart().catch(() => {});
+        if (S.midiBle) setTimeout(() => NATIVE.midiBle({ address: S.midiBle }).catch(() => {}), 2500);
+      } catch (e) {}
+    }
+  }
+  function webMidiInputs() {
+    if (!access) return;
+    const names = [];
+    access.inputs.forEach(inp => { if (/flow/i.test(inp.name || '')) return; inp.onmidimessage = ev => midiIn(Array.from(ev.data)); names.push(inp.name); });
+    if (!NATIVE) { MIDI.names = names; chanRender(); }
+  }
+  function setlistPaint() { const f = document.getElementById('set-now'); if (f && f.__paint) f.__paint(); }
+  function openSetlist() {
+    const body = subPage('setlista', curSet().name);
+    // now playing + big previous / next
+    const now = el('div', 'set-now', { id: 'set-now' });
+    const nm = el('div', 'set-name'), info = el('div', 'set-info'), notes = el('div', 'set-notes');
+    const nav = el('div', 'set-nav');
+    const prev = el('button', 'chan-switch set-btn', { type: 'button' }); prev.textContent = '◀ poprzednia';
+    const next = el('button', 'chan-switch set-btn go', { type: 'button' }); next.textContent = 'następna ▶';
+    prev.addEventListener('click', () => songStep(-1)); next.addEventListener('click', () => songStep(1));
+    nav.append(prev, next); now.append(nm, info, notes, nav); body.append(now);
+    const listG = grp(body, 'piosenki'); const listBox = el('div'); listG.append(listBox);
+    const add = el('button', 'chan-switch', { type: 'button' }); add.textContent = 'dodaj piosenkę z obecnych ustawień';
+    add.addEventListener('click', () => {
+      const t = (prompt('Nazwa piosenki', '') || '').trim().slice(0, 40); if (!t) return;
+      curSet().songs.push(songOf(t)); save(); list();
+    });
+    const n0 = el('div', 'cfg-note'); n0.textContent = 'Piosenka zapamiętuje tempo metronomu, oba efekty (program, parametry, wysyłki) i opcjonalnie scenę miksera. Stuknij nazwę, żeby ją zagrać.';
+    listG.append(add, n0);
+    now.__paint = () => {
+      const s = curSet().songs[S.songI];
+      nm.textContent = s ? (S.songI + 1) + '. ' + s.name : 'nic nie wybrano';
+      info.textContent = s ? songSum(s) : 'Stuknij piosenkę na liście albo „następna”.';
+      notes.textContent = s && s.notes ? s.notes : ''; notes.hidden = !(s && s.notes);
+      [...listBox.querySelectorAll('.song-row')].forEach((r, k) => r.classList.toggle('sel', k === S.songI));
+    };
+    function list() {
+      listBox.textContent = '';
+      const songs = curSet().songs;
+      if (!songs.length) { const n = el('div', 'cfg-note'); n.textContent = 'Pusta setlista. Ustaw tempo i efekty, potem „dodaj piosenkę”.'; listBox.append(n); }
+      songs.forEach((s, k) => {
+        const r = el('div', 'cfg-row preset-row song-row'), num = el('span', 'chan-num'), l = el('button', 'chan-label song-pick', { type: 'button' }), keys = el('div', 'cfg-keys');
+        num.textContent = k + 1; l.textContent = s.name;
+        const sm = el('span', 'preset-sum'); sm.textContent = songSum(s); l.append(sm);
+        l.addEventListener('click', () => songGo(k));
+        const ed = el('button', 'chan-switch small', { type: 'button' }); ed.textContent = 'edytuj';
+        ed.addEventListener('click', () => openSong(k, () => { list(); now.__paint(); }));
+        keys.append(ed); r.append(num, l, keys); listBox.append(r);
+      });
+      now.__paint();
+    }
+    list();
+    // setlists
+    let g = grp(body, 'setlisty');
+    const chips = el('div', 'cfg-keys'); chips.style.justifyContent = 'flex-start'; g.append(chips);
+    const chipsPaint = () => {
+      chips.textContent = '';
+      sets().forEach((x, k) => {
+        const b = el('button', 'chan-switch small', { type: 'button', 'aria-pressed': k === S.setI ? 'true' : 'false' }); b.textContent = x.name;
+        b.addEventListener('click', () => { S.setI = k; S.songI = null; save(); openSetlist(); });
+        chips.append(b);
+      });
+    };
+    chipsPaint();
+    const sk = el('div', 'cfg-keys'); sk.style.justifyContent = 'flex-start'; g.append(sk);
+    const key = (box, t, f) => { const b = el('button', 'chan-switch small', { type: 'button' }); b.textContent = t; b.addEventListener('click', f); box.append(b); return b; };
+    key(sk, 'nowa', () => { const t = (prompt('Nazwa setlisty', 'Setlista ' + (sets().length + 1)) || '').trim().slice(0, 30); if (!t) return; sets().push({ name: t, songs: [] }); S.setI = sets().length - 1; S.songI = null; save(); openSetlist(); });
+    key(sk, 'zmień nazwę', () => { const t = (prompt('Nowa nazwa setlisty', curSet().name) || '').trim().slice(0, 30); if (!t) return; curSet().name = t; save(); openSetlist(); });
+    key(sk, 'kopia setlisty', () => { const c = JSON.parse(JSON.stringify(curSet())); c.name = (c.name + ' (kopia)').slice(0, 30); sets().push(c); S.setI = sets().length - 1; save(); openSetlist(); });
+    key(sk, 'usuń', () => { if (!confirm('Usunąć setlistę „' + curSet().name + '” (' + curSet().songs.length + ' piosenek)?')) return; sets().splice(S.setI, 1); S.setI = 0; S.songI = null; save(); openSetlist(); });
+    // control
+    g = grp(body, 'sterowanie');
+    const dev = el('div', 'cfg-note'); g.append(dev);
+    subRows.push(() => { dev.textContent = MIDI.names.length ? 'Kontrolery MIDI: ' + MIDI.names.join(', ') : NATIVE ? 'Nie widzę kontrolera MIDI. Kablowy podłącz przez przejściówkę USB OTG, bezprzewodowy znajdź niżej.' : 'W przeglądarce kontroler MIDI zadziała po połączeniu przez kabel USB (menu pod lampką).'; });
+    const learnRow = (label, k) => {
+      const r = el('div', 'cfg-row preset-row'), l = el('span', 'chan-label'), box = el('div', 'cfg-keys'); l.textContent = label;
+      const v = el('span', 'preset-sum'); l.append(v); const b = el('button', 'chan-switch small', { type: 'button', 'aria-pressed': 'false' });
+      b.addEventListener('click', () => { learning = learning === k ? null : k; chanRender(); if (learning) toast('Naciśnij przycisk na kontrolerze albo pedale'); });
+      const c = el('button', 'chan-switch small', { type: 'button' }); c.textContent = 'wyczyść';
+      c.addEventListener('click', () => { if (S.ctl) delete S.ctl[k]; save(); chanRender(); });
+      subRows.push(() => { v.textContent = sigText((S.ctl || {})[k]); b.textContent = learning === k ? 'czekam…' : 'naucz'; b.setAttribute('aria-pressed', learning === k ? 'true' : 'false'); });
+      box.append(b, c); r.append(l, box); g.append(r);
+    };
+    learnRow('następna', 'next'); learnRow('poprzednia', 'prev');
+    choice(g, 'zmiana programu', () => S.pcSong !== false, v => { S.pcSong = v; }, [['wybiera piosenkę', true], ['nic', false]]);
+    choice(g, 'pedał do stron', () => S.pageKeys !== false, v => { S.pageKeys = v; }, [['działa', true], ['wyłączony', false]]);
+    const n1 = el('div', 'cfg-note'); n1.textContent = 'Zmiana programu 1 wybiera piosenkę 1, program 2 piosenkę 2 i tak dalej. Pedał do przewracania stron (albo klawiatura Bluetooth): strzałka w prawo, w dół, PageDown i spacja to następna, strzałka w lewo, w górę i PageUp to poprzednia. Działa też przy zablokowanym ekranie.'; g.append(n1);
+    if (NATIVE && NATIVE.midiScan) {
+      const bk = el('div', 'cfg-keys'); bk.style.justifyContent = 'flex-start'; g.append(bk);
+      const sb = key(bk, 'szukaj kontrolera Bluetooth MIDI', () => { MIDI.found = []; MIDI.scanning = true; chanRender(); NATIVE.midiScan().catch(e => { MIDI.scanning = false; toast(e.message || 'Nie mogę szukać'); chanRender(); }); });
+      const fb = el('div', 'cfg-keys'); fb.style.justifyContent = 'flex-start'; g.append(fb);
+      subRows.push(() => {
+        sb.textContent = MIDI.scanning ? 'szukam… (włącz kontroler)' : 'szukaj kontrolera Bluetooth MIDI';
+        fb.textContent = '';
+        MIDI.found.forEach(f => key(fb, 'połącz: ' + f.name, () => { S.midiBle = f.address; save(); NATIVE.midiBle({ address: f.address }).then(() => toast('Łączę z ' + f.name), e => toast(e.message || 'Nie udało się')); }));
+        if (!MIDI.scanning && !MIDI.found.length && S.midiBle) { const n = el('span', 'cfg-note'); n.textContent = 'Zapamiętany kontroler Bluetooth łączy się sam po starcie aplikacji.'; fb.append(n); }
+      });
+    }
+    // backup
+    g = grp(body, 'kopia zapasowa');
+    const io = el('div', 'preset-io'); g.append(io);
+    const exp = () => JSON.stringify({ flow8: 'setlists', v: 1, app: APP_VERSION, date: new Date().toISOString().slice(0, 10), sets: sets() }, null, 1);
+    key(io, NATIVE ? 'wyślij / zapisz' : 'pobierz plik', () => shareText('flow8-setlisty-' + new Date().toISOString().slice(0, 10) + '.json', exp()));
+    key(io, 'kopiuj tekst', () => { (navigator.clipboard ? navigator.clipboard.writeText(exp()) : Promise.reject()).then(() => toast('Setlisty skopiowane do schowka'), () => toast('Schowek niedostępny')); });
+    const imp = text => {
+      let d; try { d = JSON.parse(text); } catch (e) { toast('To nie jest plik z setlistami.'); return; }
+      let n = 0;
+      ((d && d.sets) || []).forEach(x => {
+        if (!x || typeof x.name !== 'string' || !Array.isArray(x.songs)) return;
+        const c = { name: x.name.trim().slice(0, 30) || 'Setlista', songs: x.songs.map(songClean).filter(Boolean) };
+        const k = sets().findIndex(q => q.name === c.name);
+        if (k >= 0) sets()[k] = c; else sets().push(c); n++;
+      });
+      save(); toast(n ? 'Wczytano setlisty: ' + n : 'Nie znalazłem setlist w tym pliku.'); if (n) openSetlist();
+    };
+    const file = el('input', '', { type: 'file', accept: '.json,application/json,text/plain', hidden: '' });
+    file.addEventListener('change', () => { const f = file.files && file.files[0]; if (f) f.text().then(imp); });
+    key(io, 'wczytaj z pliku', () => file.click());
+    key(io, 'wklej', () => {
+      if (body.querySelector('.preset-paste')) return;
+      const ta = el('textarea', 'preset-paste', { placeholder: 'Wklej tutaj tekst kopii setlist' });
+      const ok = el('button', 'chan-switch', { type: 'button' }); ok.textContent = 'dodaj z wklejonego tekstu';
+      ok.addEventListener('click', () => imp(ta.value));
+      g.append(ta, ok); ta.focus();
+    });
+    g.append(file);
+    const n2 = el('div', 'cfg-note'); n2.textContent = 'Kopia zawiera wszystkie setlisty. Wczytanie dodaje setlisty, a te o tej samej nazwie zastępuje.'; g.append(n2);
+    chanRender();
+  }
+  function openSong(k, done) {
+    const set = curSet(), s = set.songs[k];
+    const body = subPage('piosenka', (k + 1) + '. ' + s.name);
+    const back = $('#sub .chan-back'); if (back) back.addEventListener('click', () => setTimeout(() => { openSetlist(); }, 0));
+    let g = grp(body, 'nazwa i notatki');
+    const nmRow = el('div', 'cfg-row'), nl = el('span', 'chan-label'), nk = el('div', 'cfg-keys'); nl.textContent = s.name;
+    const rn = el('button', 'chan-switch small', { type: 'button' }); rn.textContent = 'zmień nazwę';
+    rn.addEventListener('click', () => { const t = (prompt('Nazwa piosenki', s.name) || '').trim().slice(0, 40); if (t) { s.name = t; nl.textContent = t; save(); } });
+    nk.append(rn); nmRow.append(nl, nk); g.append(nmRow);
+    const ta = el('textarea', 'preset-paste song-notes', { placeholder: 'Notatki widoczne przy piosence: tonacja, kapodaster, kto zaczyna…' });
+    ta.value = s.notes || ''; ta.addEventListener('input', () => { s.notes = ta.value.slice(0, 400); save(); }); g.append(ta);
+    g = grp(body, 'tempo');
+    g.append(mkRow('tempo', {
+      get: () => (s.bpm - 40) / 200, set: p => { s.bpm = Math.round(40 + p * 200); save(); },
+      text: () => s.bpm + ' bpm', ask: () => askNum('Tempo (bpm)', String(s.bpm), 'Od 40 do 240.', 40, 240, d => { s.bpm = Math.round(d); save(); })
+    }, subRows));
+    choice(g, 'metrum', () => s.beats, v => { s.beats = v; }, [['2/4', 2], ['3/4', 3], ['4/4', 4], ['6/4', 6]]);
+    choice(g, 'tempo efektu', () => s.tempoFx !== false, v => { s.tempoFx = v; }, [['wysyłaj', true], ['nie', false]]);
+    g = grp(body, 'efekty i scena');
+    const fxl = el('div', 'cfg-note'); g.append(fxl);
+    subRows.push(() => { fxl.textContent = s.fx ? 'FX 1: ' + fxName(s.fx[0]) + ' (' + s.fx[0].v1 + '%), FX 2: ' + fxName(s.fx[1]) + ' (' + s.fx[1].v1 + '%)' : 'Efekty bez zmian przy tej piosence.'; });
+    const ek = el('div', 'cfg-keys'); ek.style.justifyContent = 'flex-start'; g.append(ek);
+    const key = (t, f) => { const b = el('button', 'chan-switch small', { type: 'button' }); b.textContent = t; b.addEventListener('click', f); ek.append(b); return b; };
+    key('weź obecne efekty', () => { s.fx = songOf('').fx; save(); chanRender(); toast('Zapisano obecne efekty w piosence'); });
+    key('bez efektów', () => { delete s.fx; save(); chanRender(); });
+    key('weź obecne tempo', () => { s.bpm = M.bpm; s.beats = M.beats; save(); chanRender(); });
+    const sr = el('div', 'cfg-row'), sl = el('span', 'chan-label'), sk = el('div', 'cfg-keys'); sl.textContent = 'scena miksera';
+    const sv = el('button', 'chan-switch small', { type: 'button' });
+    sv.addEventListener('click', () => askNum('Scena miksera (0 = bez zmiany sceny)', String(s.scene === null || s.scene === undefined ? 0 : s.scene + 1), 'Od 1 do 15 albo 0, żeby nie zmieniać sceny.', 0, 15, d => { s.scene = Math.round(d) ? Math.round(d) - 1 : null; save(); }));
+    subRows.push(() => { sv.textContent = s.scene === null || s.scene === undefined ? 'bez zmiany' : 'scena ' + (s.scene + 1); });
+    sk.append(sv); sr.append(sl, sk); g.append(sr);
+    const n1 = el('div', 'cfg-note'); n1.textContent = 'Scena wczytuje się pierwsza, a efekty i tempo piosenki trafiają do miksera zaraz po niej.'; g.append(n1);
+    g = grp(body, 'kolejność');
+    const ok = el('div', 'cfg-keys'); ok.style.justifyContent = 'flex-start'; g.append(ok);
+    const mv = d => { const j = k + d; if (j < 0 || j >= set.songs.length) return; set.songs.splice(j, 0, set.songs.splice(k, 1)[0]); if (S.songI === k) S.songI = j; save(); openSong(j, done); };
+    [['wyżej', () => mv(-1)], ['niżej', () => mv(1)], ['zagraj teraz', () => songGo(k)],
+     ['usuń piosenkę', () => { if (!confirm('Usunąć „' + s.name + '” z setlisty?')) return; set.songs.splice(k, 1); if (S.songI >= set.songs.length) S.songI = null; save(); openSetlist(); }]].forEach(([t, f]) => {
+      const b = el('button', 'chan-switch small', { type: 'button' }); b.textContent = t; b.addEventListener('click', f); ok.append(b);
+    });
+    chanRender();
+  }
+  function shareText(name, t) {
+    if (NATIVE && NATIVE.share) { NATIVE.share({ title: name, text: t }).catch(() => toast('Nie udało się. Użyj „kopiuj tekst”.')); return; }
+    const a = el('a', '', { href: URL.createObjectURL(new Blob([t], { type: 'application/json' })), download: name }); document.body.append(a); a.click(); a.remove();
   }
 
   // ---------- Metronome ----------
@@ -2239,6 +2502,7 @@
   build();
   metroBuild();
   lockBuild();
+  midiInit();
   render();
   if (S.view) setView(S.view, true);
   requestAnimationFrame(() => scrollToSel(false));

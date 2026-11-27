@@ -848,3 +848,16 @@ html.v-meters .big { display: grid; grid-template-columns: repeat(8, minmax(0, 1
 .preset-parts { display: flex; gap: 6px; flex-wrap: wrap; }
 .preset-io { display: flex; gap: 6px; flex-wrap: wrap; }
 .preset-paste { width: 100%; min-height: 120px; font: 12px ui-monospace, monospace; border-radius: 8px; padding: 8px; box-sizing: border-box; background: var(--screen); color: var(--screen-ink); border: 1px solid var(--ring-2); }
+/* setlist */
+.set-now { border-radius: 12px; background: var(--screen); color: var(--screen-ink); padding: 14px 16px; display: grid; gap: 6px; margin-bottom: 8px; }
+.set-name { font-family: Doto, ui-monospace, monospace; font-weight: 900; font-size: 28px; line-height: 1.05; overflow-wrap: anywhere; }
+.set-info { font-size: 12px; color: var(--screen-dim); }
+.set-notes { font-size: 15px; white-space: pre-wrap; padding-top: 2px; }
+.set-notes[hidden] { display: none; }
+.set-nav { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
+.set-btn { min-height: 56px; font-size: 15px; }
+.set-btn.go { background: var(--accent); color: #fff; }
+.song-row .chan-num { flex: 0 0 22px; }
+.song-pick { background: none; border: none; padding: 6px 0; text-align: left; cursor: pointer; color: var(--ink); font: inherit; }
+.song-row.sel .song-pick { color: var(--accent); }
+.song-notes { min-height: 72px; font-family: Inter Tight, system-ui, sans-serif; font-size: 14px; }
