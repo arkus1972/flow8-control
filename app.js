@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.67'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.68'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -706,7 +706,7 @@
         const r = fader.getBoundingClientRect(), th = (portrait() ? 56 : 34) * K;
         const travel = r.height - th, cur = +fader.value;
         const thumbY = r.bottom - th / 2 - cur / 127 * travel;
-        drag = { id: e.pointerId, travel: travel * drag_res('resF'), y0: e.clientY, v0: S.levels[S.bus][i] }; det.start(drag.v0);
+        drag = { id: e.pointerId, travel: travel * drag_res('resF'), y0: e.clientY, v0: S.levels[S.bus][i], fresh: true }; det.start(drag.v0);
         // Only the cap moves the fader (FLOW Mix never jumps to the touched spot either):
         // a finger brushing the track must not change the mix.
         if (Math.abs(e.clientY - thumbY) > th / 2 + 10 * K || lk(i)) drag = null;
@@ -714,6 +714,7 @@
       fader.addEventListener('pointermove', e => {
         if (!drag || e.pointerId !== drag.id) return;
         e.preventDefault();
+        if (drag.fresh) { drag.fresh = false; drag.y0 = e.clientY; return; }
         setFader(det.map(drag.v0 + (drag.y0 - e.clientY) / drag.travel * 127, 127 / drag.travel));
       });
       // a finger on the cap belongs to the fader; anywhere else on the track a sideways swipe moves to the next channel (portrait)
@@ -836,20 +837,34 @@
     strips.addEventListener('pointerdown', e => {
       sw = null;
       if (!swOk() || e.pointerType === 'mouse' || e.target.closest('.s-pan')) return;
-      sw = { id: e.pointerId, x: e.clientX, y: e.clientY, done: false };
+      sw = { id: e.pointerId, x: e.clientX, y: e.clientY, done: false, side: false, vert: false };
     }, true);
+    // Until the finger shows a direction the control under it gets no moves, so a sideways swipe never turns
+    // the knob or moves the fader. Vertical first: the control takes over (and measures from that point, no jump).
+    // Sideways first: the control gets a cancel (no long press, no drag) and the swipe owns the gesture.
     strips.addEventListener('pointermove', e => {
-      if (!sw || e.pointerId !== sw.id) return;
-      if (sw.done) { e.stopPropagation(); return; }
+      if (!sw || e.pointerId !== sw.id || sw.vert) return;
+      e.stopPropagation();
       const dx = e.clientX - sw.x, dy = e.clientY - sw.y;
-      if (Math.abs(dy) > 40 && Math.abs(dy) > Math.abs(dx)) { sw = null; return; }    // a fader or knob move, not a swipe
-      if (Math.abs(dx) > 36 && Math.abs(dx) > 2 * Math.abs(dy)) {
-        sw.done = true; e.stopPropagation(); noClickUntil = performance.now() + 500;
+      if (!sw.side) {
+        if (Math.abs(dy) > 8 && Math.abs(dy) >= Math.abs(dx)) { sw.vert = true; e.target.dispatchEvent(new PointerEvent('pointermove', { pointerId: e.pointerId, pointerType: e.pointerType, clientX: e.clientX, clientY: e.clientY, bubbles: true })); return; }
+        if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) {
+          sw.side = true; noClickUntil = performance.now() + 800;
+          e.target.dispatchEvent(new PointerEvent('pointercancel', { pointerId: e.pointerId, pointerType: e.pointerType, bubbles: true }));
+        }
+        return;
+      }
+      if (!sw.done && Math.abs(dx) > 36) {
+        sw.done = true; noClickUntil = performance.now() + 500;
         const k = Math.max(0, Math.min(CHANNELS.length - 1, S.sel + (dx < 0 ? 1 : -1)));
         if (k !== S.sel) select(k, true);
       }
     }, true);
-    ['pointerup', 'pointercancel'].forEach(t => strips.addEventListener(t, e => { if (sw && e.pointerId === sw.id) { if (sw.done) e.stopPropagation(); sw = null; } }, true));
+    ['pointerup', 'pointercancel'].forEach(t => strips.addEventListener(t, e => {
+      if (!e.isTrusted || !sw || e.pointerId !== sw.id) return;
+      if (sw.side) { e.stopPropagation(); noClickUntil = Math.max(noClickUntil, performance.now() + 400); }
+      sw = null;
+    }, true));
     strips.addEventListener('click', e => { if (performance.now() < noClickUntil) { e.stopPropagation(); e.preventDefault(); } }, true);
   }
 
@@ -917,9 +932,9 @@
   // holding the master fader on fx 1 / fx 2 (no output EQ there): just its colour
   function openMasterColor(i) { const body = subPage('kolor', S.names[i] || 'main'); colorGroup(body, 'kolor suwaka', 'colF', i, subRows); chanRender(); }
   function bindKnob(knob, i) {
-    let startY = 0, startV = 0, active = false; const det = detent('detK', () => GAIN_ZERO);
+    let startY = 0, startV = 0, active = false, fresh = false; const det = detent('detK', () => GAIN_ZERO);
     knob.addEventListener('pointerdown', e => {
-      knob.setPointerCapture(e.pointerId); active = !lk(i); startY = e.clientY; startV = S.gains[i]; det.start(startV); select(i);
+      knob.setPointerCapture(e.pointerId); active = !lk(i); fresh = true; startY = e.clientY; startV = S.gains[i]; det.start(startV); select(i);
       // holding the knob still opens the channel page, like holding the fader
       hx = e.clientX; hy = e.clientY; clearTimeout(hold);
       hold = setTimeout(() => { hold = 0; active = false; bump(true); openChan(i); }, 550);
@@ -929,6 +944,7 @@
     ['pointerup', 'pointercancel'].forEach(k => knob.addEventListener(k, () => { clearTimeout(hold); hold = 0; }));
     knob.addEventListener('pointermove', e => {
       if (!active) return;
+      if (fresh) { fresh = false; startY = e.clientY; return; }    // measure from the first move (a swipe check may hold the first few px)
       const scale = (portrait() ? 0.5 : 0.8) / K / drag_res('resK');
       setGain(i, det.map(startV + (startY - e.clientY) * scale, scale));
     });
