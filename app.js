@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.61'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.62'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -781,24 +781,18 @@
     // the lamp always opens the menu (also in the Android app and while connected), it never connects or disconnects by itself
     cbtn.addEventListener('click', e => {
       e.stopPropagation();
-      $('#conn-ble').textContent = B.ready ? 'Rozłącz Bluetooth' : 'Połącz przez Bluetooth';
+      $('#conn-ble').textContent = B.ready ? 'Rozłącz' : 'Połącz';
       $('#conn-usb').hidden = !!NATIVE;
       menu.hidden = !menu.hidden; cbtn.setAttribute('aria-expanded', menu.hidden ? 'false' : 'true');
     });
     $('#conn-ble').addEventListener('click', () => { closeMenu(); if (B.ready && confirmDisconnect()) return; bleConnect(); });
     $('#conn-usb').addEventListener('click', () => { closeMenu(); connect(); });
     document.addEventListener('click', e => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(); });
-    $('#sync').addEventListener('click', () => {
-      if (B.ready) { bleSendAll(); toast('Wysłano ustawienia do miksera przez Bluetooth'); return; }
-      if (!out) { toast('Najpierw połącz się z mikserem.'); return; }
-      sendAll(); toast('Wysłano wszystkie ustawienia do miksera');
-    });
     $('#open-setup').addEventListener('click', () => { closeMenu(); openSetup(); });
     $('#open-scenes').addEventListener('click', () => { closeMenu(); openScenes(); });
     $('#sel-level').addEventListener('click', () => { if (!locked(S.sel)) askLevel(S.sel); });
     $('#sel-gain').addEventListener('click', () => { if (!locked(S.sel)) CHANNELS[S.sel].gain ? askGain(S.sel) : askPan(S.sel); });
     $('#open-app').addEventListener('click', () => { closeMenu(); openApp(); });
-    $('#open-measure').addEventListener('click', () => { closeMenu(); openMeasure(); });
     $('#open-presets').addEventListener('click', () => { closeMenu(); openPresets(); });
     $('#open-setlist').addEventListener('click', () => { closeMenu(); openSetlist(); });
     onHold($('#sel-name'), () => { if (!CHANNELS[S.sel].master) rename(S.sel); });
@@ -1158,10 +1152,20 @@
     const n2 = el('div', 'cfg-note'); n2.textContent = 'Większy opór oznacza, że palec musi przejechać dłuższą drogę (do 4 razy), więc łatwiej ustawić dokładną wartość.'; g.append(n2);
     chanRender();
   }
+  function syncAll() {
+    if (B.ready) { bleSendAll(); toast('Wysłano ustawienia do miksera przez Bluetooth'); return; }
+    if (!out) { toast('Najpierw połącz się z mikserem.'); return; }
+    sendAll(); toast('Wysłano wszystkie ustawienia do miksera');
+  }
   function openSetup() {
     const body = subPage('ustawienia', 'mikser');
     const row = (label, o) => mkRow(label, o, subRows);
-    let g = grp(body, 'wyjścia');
+    let g = grp(body, 'narzędzia');
+    const tk = el('div', 'cfg-keys'); tk.style.justifyContent = 'flex-start';
+    [['wyślij wszystko do miksera', syncAll], ['pomiar przerw w dźwięku', () => openMeasure()]].forEach(([t, f]) => { const b = el('button', 'chan-switch small', { type: 'button' }); b.textContent = t; b.addEventListener('click', f); tk.append(b); });
+    g.append(tk);
+    const tn = el('div', 'cfg-note'); tn.textContent = 'Aplikacja po połączeniu sama odczytuje ustawienia z miksera. „Wyślij wszystko” robi odwrotnie: nadpisuje mikser tym, co jest w aplikacji.'; g.append(tn);
+    g = grp(body, 'wyjścia');
     // FLOW Mix shows one limiter for both monitors while they are linked as a stereo pair
     const limRow = (label, list) => {
       const bi = list[0];
