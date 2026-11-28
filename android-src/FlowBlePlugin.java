@@ -46,7 +46,8 @@ import java.util.UUID;
     name = "FlowBle",
     permissions = {
         @Permission(alias = "ble12", strings = { Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT }),
-        @Permission(alias = "bleOld", strings = { Manifest.permission.ACCESS_FINE_LOCATION })
+        @Permission(alias = "bleOld", strings = { Manifest.permission.ACCESS_FINE_LOCATION }),
+        @Permission(alias = "mic", strings = { Manifest.permission.RECORD_AUDIO })
     }
 )
 public class FlowBlePlugin extends Plugin {
@@ -340,6 +341,148 @@ public class FlowBlePlugin extends Plugin {
             o.put("names", a);
             p.midiEvent("midiDevices", o);
         }
+    }
+
+    // ---------------------------------------------------------------- multitrack recorder (Recorder.java)
+    private Recorder recorder;
+    private Recorder rec() {
+        if (recorder == null) recorder = new Recorder(getContext(), (kind, o) -> {
+            try { notifyListeners(kind, JSObject.fromJSONObject(o)); } catch (Exception ignored) {}
+        });
+        return recorder;
+    }
+    private static JSObject js(org.json.JSONObject o) throws org.json.JSONException { return JSObject.fromJSONObject(o); }
+    private boolean old(PluginCall call) {
+        if (Build.VERSION.SDK_INT >= 23) return false;
+        call.reject("Rekorder potrzebuje Androida 6 lub nowszego"); return true;
+    }
+
+    @PluginMethod
+    public void usbAudio(PluginCall call) {
+        if (old(call)) return;
+        try {
+            JSObject o = js(rec().devices());
+            o.put("mic", getPermissionState("mic") == PermissionState.GRANTED);
+            call.resolve(o);
+        } catch (Exception e) { call.reject(String.valueOf(e.getMessage())); }
+    }
+
+    @PluginMethod
+    public void recStart(PluginCall call) {
+        if (old(call)) return;
+        if (getPermissionState("mic") != PermissionState.GRANTED) { requestPermissionForAlias("mic", call, "micDone"); return; }
+        doRecStart(call);
+    }
+
+    @PermissionCallback
+    private void micDone(PluginCall call) {
+        if (getPermissionState("mic") == PermissionState.GRANTED) doRecStart(call);
+        else call.reject("Brak zgody na nagrywanie dźwięku");
+    }
+
+    private void doRecStart(PluginCall call) {
+        try { call.resolve(js(rec().recStart(call.getData()))); }
+        catch (Exception e) { call.reject(String.valueOf(e.getMessage())); }
+    }
+
+    @PluginMethod
+    public void recStop(PluginCall call) { if (recorder != null) recorder.recStop(); call.resolve(); }
+
+    @PluginMethod
+    public void recList(PluginCall call) {
+        if (old(call)) return;
+        try { call.resolve(js(rec().list())); } catch (Exception e) { call.reject(String.valueOf(e.getMessage())); }
+    }
+
+    @PluginMethod
+    public void recDelete(PluginCall call) {
+        try { rec().delete(call.getString("dir", "")); call.resolve(); } catch (Exception e) { call.reject(String.valueOf(e.getMessage())); }
+    }
+
+    @PluginMethod
+    public void recMeta(PluginCall call) {
+        try {
+            org.json.JSONObject patch = call.getObject("meta", new JSObject());
+            rec().setMeta(call.getString("dir", ""), patch); call.resolve();
+        } catch (Exception e) { call.reject(String.valueOf(e.getMessage())); }
+    }
+
+    @PluginMethod
+    public void playLoad(PluginCall call) {
+        if (old(call)) return;
+        try { call.resolve(js(rec().playLoad(call.getString("dir", "")))); } catch (Exception e) { call.reject(String.valueOf(e.getMessage())); }
+    }
+
+    @PluginMethod
+    public void playMix(PluginCall call) {
+        try { rec().playMix(call.getArray("l", new JSArray()), call.getArray("r", new JSArray())); call.resolve(); }
+        catch (Exception e) { call.reject(String.valueOf(e.getMessage())); }
+    }
+
+    @PluginMethod
+    public void playSeek(PluginCall call) { rec().playSeek(call.getDouble("t", 0.0)); call.resolve(); }
+
+    @PluginMethod
+    public void playLoop(PluginCall call) { rec().playLoop(call.getDouble("a", -1.0), call.getDouble("b", -1.0)); call.resolve(); }
+
+    @PluginMethod
+    public void playStart(PluginCall call) {
+        try { rec().playStart(Boolean.TRUE.equals(call.getBoolean("usb", false))); call.resolve(); }
+        catch (Exception e) { call.reject(String.valueOf(e.getMessage())); }
+    }
+
+    @PluginMethod
+    public void playStop(PluginCall call) { if (recorder != null) recorder.playStop(); call.resolve(); }
+
+    @PluginMethod
+    public void playClose(PluginCall call) { if (recorder != null) recorder.playClose(); call.resolve(); }
+
+    @PluginMethod
+    public void mixdown(PluginCall call) {
+        try { rec().mixdown(call.getString("dir", ""), call.getArray("l", new JSArray()), call.getArray("r", new JSArray()), call.getString("name", "")); call.resolve(); }
+        catch (Exception e) { call.reject(String.valueOf(e.getMessage())); }
+    }
+
+    @PluginMethod
+    public void recSave(PluginCall call) {
+        try {
+            int n = rec().saveToMusic(call.getString("dir", ""), call.getArray("files", new JSArray()));
+            JSObject o = new JSObject(); o.put("count", n); call.resolve(o);
+        } catch (Exception e) { call.reject(String.valueOf(e.getMessage())); }
+    }
+
+    // send recorded WAVs to another app (Drive, e-mail, a messenger) through the app's FileProvider
+    @PluginMethod
+    public void recShare(PluginCall call) {
+        try {
+            java.io.File d = rec().dirOf(call.getString("dir", ""));
+            JSArray names = call.getArray("files", new JSArray());
+            java.util.ArrayList<android.net.Uri> uris = new java.util.ArrayList<>();
+            String auth = getContext().getPackageName() + ".fileprovider";
+            for (int i = 0; i < names.length(); i++) {
+                java.io.File f = new java.io.File(d, names.getString(i));
+                if (!f.getCanonicalPath().startsWith(d.getCanonicalPath() + java.io.File.separator) || !f.isFile()) continue;
+                uris.add(androidx.core.content.FileProvider.getUriForFile(getContext(), auth, f));
+            }
+            if (uris.isEmpty()) { call.reject("Nie ma czego wysłać"); return; }
+            android.content.Intent it;
+            if (uris.size() == 1) {
+                it = new android.content.Intent(android.content.Intent.ACTION_SEND);
+                it.putExtra(android.content.Intent.EXTRA_STREAM, uris.get(0));
+            } else {
+                it = new android.content.Intent(android.content.Intent.ACTION_SEND_MULTIPLE);
+                it.putParcelableArrayListExtra(android.content.Intent.EXTRA_STREAM, uris);
+            }
+            it.setType("audio/wav");
+            android.content.ClipData clip = android.content.ClipData.newRawUri("", uris.get(0));
+            for (int i = 1; i < uris.size(); i++) clip.addItem(new android.content.ClipData.Item(uris.get(i)));
+            it.setClipData(clip);
+            it.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            android.content.Intent ch = android.content.Intent.createChooser(it, call.getString("title", "FLOW 8"));
+            ch.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            getContext().startActivity(ch);
+            call.resolve();
+        } catch (Exception e) { call.reject("Nie mogę udostępnić: " + e.getMessage()); }
     }
 
     // send text (a preset backup) to another app: Drive, e-mail, a messenger, Files

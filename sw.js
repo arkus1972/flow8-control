@@ -1,5 +1,5 @@
 // Offline cache for FLOW 8 Control. Bump VERSION when files change.
-const VERSION = 'flow8-v73';
+const VERSION = 'flow8-v74';
 const FONTS = ['doto-latin-700', 'doto-latin-900', 'doto-latin-ext-700', 'doto-latin-ext-900',
   'inter-tight-latin-400', 'inter-tight-latin-500', 'inter-tight-latin-600', 'inter-tight-latin-700',
   'inter-tight-latin-ext-400', 'inter-tight-latin-ext-500', 'inter-tight-latin-ext-600', 'inter-tight-latin-ext-700'].map(f => 'fonts/' + f + '-normal.woff2');

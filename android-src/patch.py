@@ -6,7 +6,7 @@ root = pathlib.Path(__file__).resolve().parent.parent
 app = root / 'android' / 'app'
 pkg = app / 'src' / 'main' / 'java' / 'com' / 'arkus1972' / 'flow8control'
 pkg.mkdir(parents=True, exist_ok=True)
-for f in ('FlowBlePlugin.java', 'MainActivity.java'):
+for f in ('FlowBlePlugin.java', 'MainActivity.java', 'Recorder.java'):
     shutil.copy(root / 'android-src' / f, pkg / f)
 
 # app icon (adaptive + legacy) and splash screen, drawn from icon.svg
@@ -21,10 +21,11 @@ perms = '''
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
     <uses-feature android:name="android.software.midi" android:required="false" />
 '''
-if 'BLUETOOTH_CONNECT' not in m:
+if 'RECORD_AUDIO' not in m:
     m = m.replace('<application', perms + '\n    <application', 1)
 # keep the screen on and lock nothing: a mixer remote is used on stage
 man.write_text(m)

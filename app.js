@@ -3,7 +3,7 @@
  * (one-way, map from the FLOW 8 manual). The app keeps its own state, saved on the device. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.68'; // bump on every release (shown on the display)
+  const APP_VERSION = '0.69'; // bump on every release (shown on the display)
   document.getElementById('ver').textContent = 'v' + APP_VERSION;
   document.getElementById('ver').addEventListener('click', () => diagOpen());
 
@@ -807,6 +807,7 @@
     $('#open-setup').addEventListener('click', () => { closeMenu(); openSetup(); });
     $('#sync').addEventListener('click', () => { closeMenu(); syncAll(); });
     $('#open-measure').addEventListener('click', () => { closeMenu(); openMeasure(); });
+    $('#open-rec').addEventListener('click', () => { closeMenu(); openRecorder(); });
     $('#open-scenes').addEventListener('click', () => { closeMenu(); openScenes(); });
     $('#sel-level').addEventListener('click', () => { if (!locked(S.sel)) askLevel(S.sel); });
     $('#sel-gain').addEventListener('click', () => { if (!locked(S.sel)) CHANNELS[S.sel].gain ? askGain(S.sel) : askPan(S.sel); });
@@ -1998,7 +1999,7 @@
   }
   function setLock(i, on) { if (!Array.isArray(S.locks)) S.locks = CHANNELS.map(() => false); S.locks[i] = on; render(); chanRender(); save(); }
   let screenLocked = false;
-  function awake() { try { if (NATIVE && NATIVE.keepAwake) NATIVE.keepAwake({ on: !!(M.running || screenLocked) }).catch(() => {}); } catch (e) {} }
+  function awake() { try { if (NATIVE && NATIVE.keepAwake) NATIVE.keepAwake({ on: !!(M.running || screenLocked || REC.on) }).catch(() => {}); } catch (e) {} }
   function lockScreen(on) {
     screenLocked = on;
     $('#lockscr').hidden = !on;
@@ -2257,6 +2258,321 @@
     if (!NATIVE) { MIDI.names = names; chanRender(); }
   }
   function setlistPaint() { const f = document.getElementById('set-now'); if (f && f.__paint) f.__paint(); }
+  // ----- Multitrack recorder: every USB channel of the FLOW 8 to its own WAV, mixed again on playback -----
+  // The audio goes over the USB cable (Bluetooth carries no sound). Native side: android-src/Recorder.java.
+  const REC = { on: false, t: 0, peaks: [], max: [], names: [], dev: null, items: null, last: null, bound: false, busy: false };
+  const PL = { dir: null, meta: null, strips: [], on: false, t: 0, len: 0, peaks: [], l: -90, r: -90, usb: false, loopA: -1, loopB: -1, mixP: -1, lastMix: null };
+  const mmss = s => { s = Math.max(0, Math.floor(s || 0)); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); };
+  const sizeText = b => b > 1e9 ? (b / 1e9).toFixed(1).replace('.', window.LANG === 'en' ? '.' : ',') + ' GB' : Math.max(0, Math.round(b / 1e6)) + ' MB';
+  // FLOW 8 in USB "recording" mode: channels 1-4, 5/6 L+R, 7/8 L+R, then main L+R (to be confirmed on the mixer)
+  function recNames(n) {
+    const out = [];
+    for (let k = 0; k < n; k++) {
+      if (k < 4) out.push(S.names[k]);
+      else if (k < 6) out.push(S.names[4] + (k === 4 ? ' L' : ' P'));
+      else if (k < 8) out.push(S.names[5] + (k === 6 ? ' L' : ' P'));
+      else if (k < 10) out.push((S.names[7] || 'main') + (k === 8 ? ' L' : ' P'));
+      else out.push('USB ' + (k + 1));
+    }
+    return out;
+  }
+  const recPairs = n => [[4, 5], [6, 7], [8, 9]].filter(p => p[1] < n);
+  function recBind() {
+    if (REC.bound || !NATIVE || !NATIVE.recStart) return;
+    REC.bound = true;
+    NATIVE.addListener('rec', e => { REC.t = e.t; REC.peaks = e.peaks || []; REC.max = e.max || []; recPaint(); });
+    NATIVE.addListener('recDone', e => {
+      REC.on = false; REC.last = e; awake(); REC.items = null;
+      const why = e.reason === 'brak miejsca' ? ' Zabrakło miejsca w telefonie.' : /^błąd/.test(e.reason || '') ? ' Przerwane: ' + e.reason + '.' : '';
+      toast((e.test ? 'Test zapisany: ' : 'Nagranie zapisane: ') + mmss(e.seconds) + ', ' + e.channels + ' śladów.' + why);
+      recRefresh();
+    });
+    NATIVE.addListener('play', e => { PL.t = e.t; PL.peaks = e.peaks || []; PL.l = e.l; PL.r = e.r; plPaint(); });
+    NATIVE.addListener('playEnd', e => { PL.on = false; if (e && e.end) PL.t = 0; if (e && e.error) toast('Odtwarzanie przerwane: ' + e.error); plPaint(); });
+    NATIVE.addListener('mixProgress', e => { PL.mixP = e.p; plPaint(); });
+    NATIVE.addListener('mixDone', e => {
+      PL.mixP = -1; if (e.error) { toast('Eksport nieudany: ' + e.error); plPaint(); return; }
+      PL.lastMix = e.file; toast('Miks gotowy: ' + e.file + (e.peakDb > -0.1 ? ' (uwaga: przester, ścisz master)' : '')); plPaint();
+      if (PL.meta) { (PL.meta.mixes = PL.meta.mixes || []).includes(e.file) || PL.meta.mixes.push(e.file); }
+    });
+  }
+  let recPaint = () => {}, recRefresh = () => {}, plPaint = () => {};
+  async function recUsb() { try { REC.dev = await NATIVE.usbAudio(); } catch (e) { REC.dev = { error: e.message || String(e) }; } }
+  const usbIn = () => REC.dev && REC.dev.inputs ? REC.dev.inputs.filter(d => d.usb).sort((a, b) => b.max - a.max)[0] : null;
+  function usbText() {
+    const d = REC.dev;
+    if (!d) return 'Sprawdzam kartę USB…';
+    if (d.error) return 'Nie mogę sprawdzić USB: ' + d.error;
+    const u = usbIn();
+    if (!u) return 'Nie widzę karty dźwiękowej USB. Podłącz FLOW 8 kablem USB do telefonu (przejściówka USB OTG, jeśli trzeba) i w Ustawieniach miksera wybierz tryb USB „nagrywanie”.';
+    const rates = (u.rates || []).length ? u.rates.map(r => r / 1000).join(', ') + ' kHz' : 'dowolne';
+    return 'Karta USB: ' + u.name + '. Android zgłasza do ' + (u.max || '?') + ' kanałów, próbkowanie ' + rates + '.';
+  }
+  async function recToggle() {
+    if (REC.busy) return;
+    if (REC.on) { REC.busy = true; try { await NATIVE.recStop(); } catch (e) {} REC.busy = false; return; }
+    await recStartRec({});
+  }
+  async function recStartRec(o) {
+    REC.busy = true;
+    try {
+      if (PL.on) { await NATIVE.playStop(); PL.on = false; }
+      const u = usbIn(), n = u && u.max ? u.max : 10;
+      const song = curSet().songs[S.songI];
+      const name = o.test ? '' : (S.recName !== undefined ? S.recName : song ? song.name : '');
+      const r = await NATIVE.recStart({ names: recNames(n), pairs: recPairs(n), name, test: !!o.test, seconds: o.seconds || 0, song: song ? song.name : '' });
+      REC.on = true; REC.t = 0; REC.peaks = []; REC.max = []; REC.names = r.names || recNames(r.channels); REC.ch = r.channels; REC.bits = r.bits; REC.devName = r.device; REC.asked = r.asked;
+      awake();
+      if (r.channels < (u && u.max ? u.max : 10)) toast('Android dał tylko ' + r.channels + ' z ' + (u && u.max ? u.max : 10) + ' kanałów. Nagrywam tyle, ile się da.');
+    } catch (e) { toast(e.message || 'Nie udało się zacząć nagrywania'); }
+    REC.busy = false; recPaint();
+  }
+  function recReport() {
+    const L = ['FLOW 8 Control v' + APP_VERSION + ' rekorder ' + new Date().toISOString()];
+    const d = REC.dev || {};
+    L.push('telefon: ' + (d.model || '?') + ', Android SDK ' + (d.sdk || '?') + ', wolne ' + sizeText(d.free || 0));
+    (d.inputs || []).forEach(x => L.push('wejście: ' + x.name + ' [' + x.type + '] kanały ' + JSON.stringify(x.channels) + ' maski ' + JSON.stringify(x.indexMasks) + ' Hz ' + JSON.stringify(x.rates) + ' kod ' + JSON.stringify(x.encodings)));
+    (d.outputs || []).filter(x => x.usb).forEach(x => L.push('wyjście: ' + x.name + ' [' + x.type + '] kanały ' + JSON.stringify(x.channels) + ' maski ' + JSON.stringify(x.indexMasks)));
+    const t = REC.last;
+    if (t) L.push('ostatnie nagranie: ' + mmss(t.seconds) + ', ' + t.channels + ' śladów ' + t.bits + ' bit, ' + t.device + ', koniec: ' + t.reason + ', szczyty dB: ' + JSON.stringify(t.maxDb));
+    return L.join('\n');
+  }
+  function openRecorder() {
+    const body = subPage('rekorder', 'USB');
+    if (!NATIVE || !NATIVE.recStart) {
+      const n = el('div', 'cfg-note'); n.textContent = 'Rekorder działa w aplikacji na Androidzie (APK). Dźwięk idzie kablem USB z miksera do telefonu, każdy kanał na osobny ślad.'; body.append(n); return;
+    }
+    recBind();
+    // the card
+    let g = grp(body, 'karta USB');
+    const info = el('div', 'cfg-note'); g.append(info);
+    const uk = el('div', 'cfg-keys');
+    const kb = (box, t, f) => { const b = el('button', 'chan-switch small', { type: 'button' }); b.textContent = t; b.addEventListener('click', f); box.append(b); return b; };
+    kb(uk, 'sprawdź', async () => { REC.dev = null; recPaint(); await recUsb(); recPaint(); });
+    const tb = kb(uk, 'test 10 s', () => { if (!REC.on) recStartRec({ test: true, seconds: 10 }); });
+    kb(uk, 'kopiuj raport', () => { const t = recReport(); (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => toast('Raport skopiowany. Wklej go tutaj w rozmowie.'), () => { const a = el('textarea', 'm-copy'); a.value = t; uk.after(a); a.select(); }); });
+    g.append(uk);
+    // recording
+    g = grp(body, 'nagrywanie');
+    const top = el('div', 'rec-top');
+    const big = el('button', 'rec-btn', { type: 'button', 'aria-label': 'Nagrywaj' }); big.innerHTML = '<span></span>';
+    const tm = el('div', 'rec-time'), sub = el('div', 'rec-sub');
+    const tbox = el('div', 'rec-tbox'); tbox.append(tm, sub);
+    top.append(big, tbox); g.append(top);
+    big.addEventListener('click', recToggle);
+    const nameRow = el('div', 'cfg-row'), nl = el('span', 'chan-label'), nameB = el('button', 'chan-switch small rec-name', { type: 'button', 'data-notr': '' });
+    nl.textContent = 'nazwa nagrania'; nameRow.append(nl, nameB); g.append(nameRow);
+    nameB.addEventListener('click', () => { const s = curSet().songs[S.songI]; const v = prompt('Nazwa nagrania (pusta = nazwa piosenki z setlisty)', S.recName || ''); if (v === null) return; S.recName = v.trim().slice(0, 40) || undefined; save(); recPaint(); });
+    const meters = el('div', 'rec-meters'); g.append(meters);
+    const note = el('div', 'cfg-note'); note.textContent = 'Podczas nagrywania ekran zostaje włączony. Nie zamykaj aplikacji, sterowanie mikserem działa normalnie.'; g.append(note);
+    // recordings
+    g = grp(body, 'nagrania');
+    const lst = el('div', 'rec-list'); g.append(lst);
+    const free = el('div', 'cfg-note'); g.append(free);
+    let mRows = [];
+    recPaint = () => {
+      if (!big.isConnected) return;
+      info.textContent = usbText(); tb.disabled = REC.on;
+      big.classList.toggle('on', REC.on); big.setAttribute('aria-label', REC.on ? 'Zatrzymaj nagrywanie' : 'Nagrywaj');
+      tm.textContent = REC.on ? mmss(REC.t) : '0:00';
+      const u = usbIn(), n = REC.on ? REC.ch : (u && u.max ? u.max : 10);
+      const perH = n * 48000 * 3 * 3600, freeB = REC.dev && REC.dev.free || 0;
+      sub.textContent = REC.on ? 'nagrywam ' + REC.ch + ' śladów, ' + REC.bits + ' bit' : u ? 'gotowy, ' + n + ' śladów' : 'brak karty USB';
+      const song = curSet().songs[S.songI];
+      nameB.textContent = S.recName || (song ? song.name : 'data i godzina');
+      free.textContent = freeB ? 'Wolne miejsce: ' + sizeText(freeB) + ', starczy na około ' + mmss(freeB / perH * 3600) + ' nagrania ' + n + ' śladów.' : '';
+      const names = REC.on ? REC.names : recNames(n);
+      if (mRows.length !== names.length) {
+        meters.textContent = ''; mRows = names.map(nm => { const r = el('div', 'rec-m'), l = el('span', 'rec-mn', { 'data-notr': '' }), b = el('span', 'rec-mb'), f = el('i'), v = el('span', 'rec-mv'); b.append(f); r.append(l, b, v); meters.append(r); return { r, l, f, v }; });
+      }
+      mRows.forEach((m, k) => {
+        m.l.textContent = names[k];
+        const p = REC.on && REC.peaks[k] !== undefined ? REC.peaks[k] : -90, mx = REC.on && REC.max[k] !== undefined ? REC.max[k] : -90;
+        m.f.style.width = Math.max(0, Math.min(100, (p + 60) / 60 * 100)) + '%';
+        m.r.classList.toggle('clip', mx > -0.5); m.v.textContent = REC.on ? (mx <= -89 ? '-∞' : fmt(mx)) : '';
+      });
+    };
+    recRefresh = async () => {
+      if (!lst.isConnected) return;
+      try { const r = await NATIVE.recList(); REC.items = r.items || []; if (REC.dev) REC.dev.free = r.free; } catch (e) { REC.items = []; }
+      lst.textContent = '';
+      if (!REC.items.length) { const n = el('div', 'cfg-note'); n.textContent = 'Jeszcze nic nie nagrano.'; lst.append(n); }
+      REC.items.forEach(it => {
+        const r = el('div', 'cfg-row preset-row'), l = el('button', 'chan-label song-pick', { type: 'button' });
+        const nm = el('span', '', { 'data-notr': '' }); nm.textContent = (it.name || it.song || 'nagranie bez nazwy') + (it.test ? ' (test)' : '');
+        const sm = el('span', 'preset-sum'); sm.textContent = it.date ? it.date.slice(0, 16).replace(/(\d\d)-(\d\d)$/, '$1:$2') + ', ' + mmss((it.frames || 0) / (it.rate || 48000)) + ', ' + (it.files ? it.files.length : 0) + ' śladów, ' + sizeText(it.size || 0) : sizeText(it.size || 0);
+        l.append(nm, sm); l.addEventListener('click', () => openPlayer(it.dir));
+        r.append(l); lst.append(r);
+      });
+      recPaint();
+    };
+    recPaint();
+    recUsb().then(() => { recPaint(); recRefresh(); });
+  }
+
+  // ----- Player: the recorded tracks with their own little mixer -----
+  const dbLin = d => d <= -60 ? 0 : Math.pow(10, d / 20);
+  function plGains() {
+    const n = (PL.meta.files || []).length, l = new Array(n).fill(0), r = new Array(n).fill(0);
+    const solo = PL.strips.some(s => s.solo), m = dbLin(PL.mix.master);
+    PL.strips.forEach(s => {
+      if (s.mute || (solo && !s.solo)) return;
+      const g = dbLin(s.vol) * m, p = s.pan;
+      if (s.files.length === 2) { l[s.files[0]] = g * Math.min(1, 1 - p); r[s.files[1]] = g * Math.min(1, 1 + p); }
+      else { const a = (p + 1) * Math.PI / 4; l[s.files[0]] = g * Math.cos(a) * Math.SQRT2; r[s.files[0]] = g * Math.sin(a) * Math.SQRT2; }
+    });
+    return { l, r };
+  }
+  let plSaveT = 0;
+  function plSend() {
+    const g = plGains(); NATIVE.playMix(g).catch(() => {});
+    clearTimeout(plSaveT); plSaveT = setTimeout(() => NATIVE.recMeta({ dir: PL.dir, meta: { mix: PL.mix } }).catch(() => {}), 800);
+  }
+  function plBuild() {
+    const files = PL.meta.files || [], names = PL.meta.names || files.map(f => f.replace(/\.wav$/i, ''));
+    const mix = PL.meta.mix || {};
+    const pairs = mix.split ? [] : (PL.meta.pairs || recPairs(files.length));
+    PL.mix = { master: mix.master !== undefined ? mix.master : 0, split: !!mix.split, strips: mix.strips || {} };
+    PL.strips = [];
+    const inPair = new Set(pairs.flat());
+    for (let k = 0; k < files.length; k++) {
+      if (inPair.has(k)) { const p = pairs.find(q => q[0] === k); if (!p) continue; }
+      const p = pairs.find(q => q[0] === k), fs = p ? p : [k];
+      const key = fs.join('+'), st = PL.mix.strips[key] || {};
+      const nm = p ? names[p[0]].replace(/ L$/, '') : names[k];
+      const s = { key, files: fs, name: st.name || nm, vol: st.vol !== undefined ? st.vol : 0, pan: st.pan || 0, mute: !!st.mute, solo: !!st.solo };
+      PL.strips.push(s);
+    }
+  }
+  const plStore = s => { PL.mix.strips[s.key] = { name: s.name, vol: s.vol, pan: s.pan, mute: s.mute, solo: s.solo }; };
+  async function openPlayer(dir) {
+    recBind();
+    try { if (PL.dir && PL.dir !== dir) await NATIVE.playClose(); PL.meta = await NATIVE.playLoad({ dir }); }
+    catch (e) { toast(e.message || 'Nie mogę otworzyć nagrania'); return; }
+    PL.dir = dir; PL.on = false; PL.t = 0; PL.len = (PL.meta.frames || 0) / (PL.meta.rate || 48000); PL.loopA = PL.loopB = -1; PL.lastMix = null; PL.mixP = -1;
+    plBuild();
+    const body = subPage('odtwarzacz', PL.meta.name || PL.meta.song || 'nagranie');
+    const back = $('#sub .chan-back'); if (back) back.addEventListener('click', () => { NATIVE.playClose().catch(() => {}); PL.on = false; PL.dir = null; openRecorder(); });
+    const kb = (box, t, f, cls) => { const b = el('button', 'chan-switch small' + (cls ? ' ' + cls : ''), { type: 'button' }); b.textContent = t; b.addEventListener('click', f); box.append(b); return b; };
+    // transport
+    let g = grp(body, 'odtwarzanie');
+    const time = el('div', 'rec-time pl-time'); g.append(time);
+    const seek = el('input', 'pl-seek', { type: 'range', min: 0, max: 1000, step: 1, value: 0, 'aria-label': 'Pozycja' }); g.append(seek);
+    let seeking = false;
+    seek.addEventListener('input', () => { seeking = true; PL.t = seek.value / 1000 * PL.len; plPaint(); });
+    seek.addEventListener('change', () => { seeking = false; NATIVE.playSeek({ t: PL.t }).catch(() => {}); });
+    const tr1 = el('div', 'cfg-keys pl-keys');
+    const jump = d => { PL.t = Math.max(0, Math.min(PL.len, PL.t + d)); NATIVE.playSeek({ t: PL.t }).catch(() => {}); plPaint(); };
+    const ico = { start: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h2v14H6zM19 5v14L9 12z"/></svg>', play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16l13-8z"/></svg>', pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg>' };
+    const st = kb(tr1, '', () => jump(-1e9), 'pl-ico'); st.innerHTML = ico.start; st.setAttribute('aria-label', 'Na początek'); kb(tr1, '−10 s', () => jump(-10));
+    const pb = kb(tr1, '', async () => {
+      try {
+        if (PL.on) { await NATIVE.playStop(); PL.on = false; }
+        else { if (REC.on) { toast('Najpierw zatrzymaj nagrywanie.'); return; } plSend(); await NATIVE.playSeek({ t: PL.t }); await NATIVE.playStart({ usb: PL.usb }); PL.on = true; }
+      } catch (e) { toast(e.message || 'Nie udało się'); }
+      plPaint();
+    }, 'go pl-play pl-ico');
+    kb(tr1, '+10 s', () => jump(10));
+    g.append(tr1);
+    const tr2 = el('div', 'cfg-keys pl-keys');
+    const la = kb(tr2, 'pętla od', () => { PL.loopA = PL.t; if (PL.loopB <= PL.loopA) PL.loopB = -1; NATIVE.playLoop({ a: PL.loopA, b: PL.loopB }).catch(() => {}); plPaint(); });
+    const lb = kb(tr2, 'pętla do', () => { if (PL.loopA < 0) PL.loopA = 0; if (PL.t > PL.loopA) { PL.loopB = PL.t; NATIVE.playLoop({ a: PL.loopA, b: PL.loopB }).catch(() => {}); NATIVE.playSeek({ t: PL.loopA }).catch(() => {}); PL.t = PL.loopA; } else toast('Koniec pętli musi być za początkiem.'); plPaint(); });
+    const lx = kb(tr2, 'bez pętli', () => { PL.loopA = PL.loopB = -1; NATIVE.playLoop({ a: -1, b: -1 }).catch(() => {}); plPaint(); });
+    g.append(tr2);
+    choice(g, 'słuchaj przez', () => PL.usb, v => { PL.usb = v; if (PL.on) { NATIVE.playStop().then(() => NATIVE.playStart({ usb: v })).catch(() => {}); } }, [['telefon', false], ['mikser USB', true]]);
+    const un = el('div', 'cfg-note'); un.textContent = '„mikser USB” wysyła miks z powrotem do FLOW 8 (USB 1/2). Żeby go usłyszeć, ustaw w Ustawieniach miksera kanał 5/6 na USB.'; g.append(un);
+    // the track mixer
+    g = grp(body, 'ślady');
+    const box = el('div', 'pl-strips'); g.append(box);
+    const rows = [];
+    const row = (s, master) => {
+      const r = el('div', 'pl-row' + (master ? ' master' : ''));
+      const nm = el('button', 'pl-name', { type: 'button', 'data-notr': master ? null : '' }); if (master) nm.removeAttribute('data-notr');
+      const meter = el('i', 'pl-meter'); nm.append(meter); const nt = el('span'); nm.append(nt);
+      const vol = el('input', 'pl-vol', { type: 'range', min: -60, max: 10, step: 0.5, value: master ? PL.mix.master : s.vol, 'aria-label': 'Głośność' });
+      const vv = el('button', 'pl-db', { type: 'button' });
+      r.append(nm, vol, vv);
+      const keys = el('div', 'pl-k');
+      let mu, so, pan;
+      if (!master) {
+        pan = el('input', 'pl-pan', { type: 'range', min: -1, max: 1, step: 0.05, value: s.pan, 'aria-label': s.files.length === 2 ? 'Balans' : 'Panorama' });
+        mu = kb(keys, 'M', () => { s.mute = !s.mute; plStore(s); plSend(); plPaint(); }, 'pl-mute');
+        so = kb(keys, 'S', () => { s.solo = !s.solo; plStore(s); plSend(); plPaint(); }, 'pl-solo');
+        keys.prepend(pan);
+        pan.addEventListener('input', () => { s.pan = +pan.value; if (Math.abs(s.pan) < 0.06) s.pan = 0; plStore(s); plSend(); });
+        pan.addEventListener('dblclick', () => { s.pan = 0; pan.value = 0; plStore(s); plSend(); });
+        onHold(nm, () => { const v = (prompt('Nazwa śladu', s.name) || '').trim().slice(0, 20); if (v) { s.name = v; plStore(s); plSend(); plPaint(); } });
+        r.append(keys);
+      }
+      vol.addEventListener('input', () => { const v = +vol.value; if (master) PL.mix.master = v; else { s.vol = v; plStore(s); } plSend(); plPaint(); });
+      vv.addEventListener('click', () => {
+        const cur = master ? PL.mix.master : s.vol;
+        const t = prompt('Głośność w dB (od -60 do +10)', String(cur).replace('.', ',')); if (t === null) return;
+        const v = Math.max(-60, Math.min(10, Math.round(parseFloat(t.replace(',', '.')) * 2) / 2)); if (isNaN(v)) return;
+        if (master) PL.mix.master = v; else { s.vol = v; plStore(s); } vol.value = v; plSend(); plPaint();
+      });
+      box.append(r);
+      rows.push({ s, master, nt, meter, vol, vv, mu, so, r });
+    };
+    PL.strips.forEach(s => row(s, false));
+    row(null, true);
+    const pk = el('div', 'cfg-keys');
+    kb(pk, PL.mix.split ? 'połącz pary stereo' : 'rozdziel pary stereo', () => { PL.meta.mix = Object.assign({}, PL.mix, { split: !PL.mix.split, strips: {} }); NATIVE.recMeta({ dir: PL.dir, meta: { mix: PL.meta.mix } }).catch(() => {}); NATIVE.playStop().catch(() => {}); openPlayer(PL.dir); });
+    kb(pk, 'wyzeruj miks', () => { if (!confirm('Ustawić wszystkie ślady na 0 dB, środek, bez mute i solo?')) return; PL.meta.mix = { split: PL.mix.split, master: 0, strips: {} }; NATIVE.recMeta({ dir: PL.dir, meta: { mix: PL.meta.mix } }).catch(() => {}); NATIVE.playStop().catch(() => {}); openPlayer(PL.dir); });
+    g.append(pk);
+    const hn = el('div', 'cfg-note'); hn.textContent = 'Przytrzymaj nazwę śladu, żeby ją zmienić. Stuknij wartość dB, żeby ją wpisać. Miks zapisuje się przy nagraniu.'; g.append(hn);
+    // export
+    g = grp(body, 'eksport');
+    const ek = el('div', 'cfg-keys');
+    const mixB = kb(ek, 'zrób miks stereo (WAV)', () => {
+      if (PL.mixP >= 0) return;
+      const t = prompt('Nazwa pliku miksu', PL.meta.name || PL.meta.song || ''); if (t === null) return;
+      const gn = plGains(); PL.mixP = 0; plPaint();
+      NATIVE.mixdown({ dir: PL.dir, l: gn.l, r: gn.r, name: t }).catch(e => { PL.mixP = -1; toast(e.message || 'Nie udało się'); plPaint(); });
+    });
+    const sendMix = kb(ek, 'wyślij miks', () => { if (PL.lastMix) NATIVE.recShare({ dir: PL.dir, files: [PL.lastMix], title: PL.lastMix }).catch(e => toast(e.message || 'Nie udało się')); });
+    kb(ek, 'wyślij ślady', () => NATIVE.recShare({ dir: PL.dir, files: PL.meta.files, title: PL.meta.name || PL.dir }).catch(e => toast(e.message || 'Nie udało się')));
+    kb(ek, 'zapisz w Muzyce', () => { toast('Kopiuję do Muzyka/FLOW8…'); NATIVE.recSave({ dir: PL.dir }).then(r => toast('Skopiowano ' + r.count + ' plików do Muzyka/FLOW8/' + PL.dir + '.'), e => toast(e.message || 'Nie udało się')); });
+    g.append(ek);
+    const mixInfo = el('div', 'cfg-note'); g.append(mixInfo);
+    g = grp(body, 'nagranie');
+    const mk = el('div', 'cfg-keys');
+    kb(mk, 'zmień nazwę', () => { const t = (prompt('Nazwa nagrania', PL.meta.name || '') || '').trim().slice(0, 40); if (!t) return; PL.meta.name = t; NATIVE.recMeta({ dir: PL.dir, meta: { name: t } }).then(() => { const h = $('#sub .chan-num'); if (h) h.textContent = t; REC.items = null; }).catch(() => {}); });
+    kb(mk, 'usuń nagranie', async () => {
+      if (!confirm('Usunąć to nagranie ze wszystkimi śladami? Tego nie da się cofnąć.')) return;
+      try { await NATIVE.playClose(); await NATIVE.recDelete({ dir: PL.dir }); PL.dir = null; toast('Usunięto.'); openRecorder(); } catch (e) { toast(e.message || 'Nie udało się usunąć'); }
+    });
+    g.append(mk);
+    const det = el('div', 'cfg-note'); det.textContent = (PL.meta.files || []).length + ' plików WAV, ' + (PL.meta.rate || 48000) / 1000 + ' kHz' + (PL.meta.bits ? ', ' + PL.meta.bits + ' bit' : '') + (PL.meta.device ? ', z: ' + PL.meta.device : '') + '. Folder w telefonie: Android/data/…/Music/FLOW8/' + PL.dir; g.append(det);
+    plPaint = () => {
+      if (!time.isConnected) return;
+      time.textContent = mmss(PL.t) + ' / ' + mmss(PL.len);
+      if (!seeking) seek.value = PL.len ? Math.round(PL.t / PL.len * 1000) : 0;
+      pb.innerHTML = PL.on ? ico.pause : ico.play; pb.setAttribute('aria-label', PL.on ? 'Pauza' : 'Graj');
+      la.setAttribute('aria-pressed', PL.loopA >= 0 ? 'true' : 'false'); lb.setAttribute('aria-pressed', PL.loopB > 0 ? 'true' : 'false');
+      la.textContent = PL.loopA >= 0 ? 'od ' + mmss(PL.loopA) : 'pętla od'; lb.textContent = PL.loopB > 0 ? 'do ' + mmss(PL.loopB) : 'pętla do'; lx.disabled = PL.loopA < 0 && PL.loopB < 0;
+      const solo = PL.strips.some(s => s.solo);
+      rows.forEach(w => {
+        let pk = -90;
+        if (w.master) { w.nt.textContent = 'master'; pk = PL.on ? Math.max(PL.l, PL.r) : -90; }
+        else { w.nt.textContent = w.s.name; if (PL.on) w.s.files.forEach(f => { pk = Math.max(pk, PL.peaks[f] !== undefined ? PL.peaks[f] : -90); }); }
+        w.meter.style.width = Math.max(0, Math.min(100, (pk + 60) / 60 * 100)) + '%';
+        w.meter.classList.toggle('clip', pk > -0.5);
+        const v = w.master ? PL.mix.master : w.s.vol;
+        w.vv.textContent = v <= -60 ? '-∞' : fmt(v);
+        if (!w.master) {
+          w.mu.setAttribute('aria-pressed', w.s.mute ? 'true' : 'false'); w.so.setAttribute('aria-pressed', w.s.solo ? 'true' : 'false');
+          w.r.classList.toggle('dim', w.s.mute || (solo && !w.s.solo));
+        }
+      });
+      mixB.textContent = PL.mixP >= 0 ? 'eksport… ' + PL.mixP + '%' : 'zrób miks stereo (WAV)';
+      sendMix.hidden = !PL.lastMix;
+      const mx = (PL.meta.mixes || []);
+      mixInfo.textContent = PL.lastMix ? 'Gotowy plik: ' + PL.lastMix : mx.length ? 'Zrobione miksy: ' + mx.join(', ') : 'Miks stereo powstaje z obecnych ustawień śladów, bez przerywania odtwarzania.';
+    };
+    plSend(); plPaint(); chanRender();
+  }
+
   function openSetlist() {
     const body = subPage('setlista', curSet().name);
     // now playing + big previous / next

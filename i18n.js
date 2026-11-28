@@ -154,7 +154,32 @@
     ['wyjście', 'output'], ['dźwięk', 'sound'], ['głośność', 'volume'], ['Głośność metronomu', 'Metronome volume'], ['lewe', 'left'], ['prawe', 'right'],
     ['drewno', 'wood'], ['tak', 'yes'], ['nie', 'no'],
     // ----- MIDI native -----
-    ['MIDI wymaga Androida 6', 'MIDI needs Android 6'], ['Nie mogę połączyć: ', 'Cannot connect: '], ['Nie mogę udostępnić', 'Cannot share']
+    ['MIDI wymaga Androida 6', 'MIDI needs Android 6'], ['Nie mogę połączyć: ', 'Cannot connect: '], ['Nie mogę udostępnić', 'Cannot share'],
+    // ----- recorder (v0.69) -----
+    ['Rekorder', 'Recorder'], ['rekorder', 'recorder'], ['odtwarzacz', 'player'], ['karta USB', 'USB card'], ['sprawdź', 'check'], ['test 10 s', '10 s test'],
+    ['nagrywanie', 'recording'], ['nagrania', 'recordings'], ['nazwa nagrania', 'recording name'], ['data i godzina', 'date and time'], ['Nagrywaj', 'Record'], ['Zatrzymaj nagrywanie', 'Stop recording'],
+    ['Podczas nagrywania ekran zostaje włączony. Nie zamykaj aplikacji, sterowanie mikserem działa normalnie.', 'While recording the screen stays on. Keep the app open, mixer control works as usual.'],
+    ['Jeszcze nic nie nagrano.', 'Nothing recorded yet.'], ['nagranie bez nazwy', 'untitled recording'], ['Sprawdzam kartę USB…', 'Checking the USB card…'],
+    ['Nie widzę karty dźwiękowej USB. Podłącz FLOW 8 kablem USB do telefonu (przejściówka USB OTG, jeśli trzeba) i w Ustawieniach miksera wybierz tryb USB „nagrywanie”.', 'No USB sound card found. Connect the FLOW 8 to the phone with a USB cable (USB OTG adapter if needed) and set USB mode to “recording” in the mixer settings.'],
+    ['Karta USB: ', 'USB card: '], ['. Android zgłasza do ', '. Android reports up to '], [' kanałów, próbkowanie ', ' channels, sample rate '], ['dowolne', 'any'],
+    ['nagrywam ', 'recording '], ['gotowy, ', 'ready, '], ['brak karty USB', 'no USB card'], [' śladów', ' tracks'], ['śladów', 'tracks'],
+    ['Wolne miejsce: ', 'Free space: '], [', starczy na około ', ', enough for about '], [' nagrania ', ' of recording, '],
+    ['Nazwa nagrania (pusta = nazwa piosenki z setlisty)', 'Recording name (empty = song name from the setlist)'], ['Nazwa nagrania', 'Recording name'],
+    ['Nagranie zapisane: ', 'Recording saved: '], ['Test zapisany: ', 'Test saved: '], [' Zabrakło miejsca w telefonie.', ' The phone ran out of space.'],
+    ['Rekorder działa w aplikacji na Androidzie (APK). Dźwięk idzie kablem USB z miksera do telefonu, każdy kanał na osobny ślad.', 'The recorder works in the Android app (APK). Sound goes from the mixer to the phone over USB, each channel to its own track.'],
+    ['odtwarzanie', 'playback'], ['Pozycja', 'Position'], ['Na początek', 'To start'], ['Pauza', 'Pause'], ['Graj', 'Play'], ['pętla od', 'loop from'], ['pętla do', 'loop to'], ['bez pętli', 'no loop'],
+    ['słuchaj przez', 'listen on'], ['telefon', 'phone'], ['mikser USB', 'mixer USB'],
+    ['„mikser USB” wysyła miks z powrotem do FLOW 8 (USB 1/2). Żeby go usłyszeć, ustaw w Ustawieniach miksera kanał 5/6 na USB.', '“mixer USB” sends the mix back to the FLOW 8 (USB 1/2). To hear it, set channel 5/6 to USB in the mixer settings.'],
+    ['ślady', 'tracks'], ['Głośność', 'Volume'], ['Balans', 'Balance'], ['Panorama', 'Pan'], ['Nazwa śladu', 'Track name'], ['Głośność w dB (od -60 do +10)', 'Volume in dB (-60 to +10)'],
+    ['rozdziel pary stereo', 'split stereo pairs'], ['połącz pary stereo', 'join stereo pairs'], ['wyzeruj miks', 'reset mix'],
+    ['Ustawić wszystkie ślady na 0 dB, środek, bez mute i solo?', 'Set all tracks to 0 dB, centre, no mute or solo?'],
+    ['Przytrzymaj nazwę śladu, żeby ją zmienić. Stuknij wartość dB, żeby ją wpisać. Miks zapisuje się przy nagraniu.', 'Hold a track name to rename it. Tap the dB value to type it. The mix is saved with the recording.'],
+    ['eksport', 'export'], ['zrób miks stereo (WAV)', 'make stereo mix (WAV)'], ['wyślij miks', 'send mix'], ['wyślij ślady', 'send tracks'], ['zapisz w Muzyce', 'save to Music'],
+    ['Nazwa pliku miksu', 'Mix file name'], ['Gotowy plik: ', 'Ready file: '], ['Zrobione miksy: ', 'Mixes made: '],
+    ['Miks stereo powstaje z obecnych ustawień śladów, bez przerywania odtwarzania.', 'The stereo mix is made from the current track settings, playback keeps going.'],
+    ['nagranie', 'recording'], ['zmień nazwę', 'rename'], ['usuń nagranie', 'delete recording'], ['Usunąć to nagranie ze wszystkimi śladami? Tego nie da się cofnąć.', 'Delete this recording with all its tracks? This cannot be undone.'],
+    ['Usunięto.', 'Deleted.'], ['Miks gotowy: ', 'Mix ready: '], [' (uwaga: przester, ścisz master)', ' (warning: clipping, lower the master)'], ['Najpierw zatrzymaj nagrywanie.', 'Stop recording first.'],
+    ['Raport skopiowany. Wklej go tutaj w rozmowie.', 'Report copied. Paste it here in the chat.'], ['kopiuj raport', 'copy report']
   ];
   const exact = new Map(D.map(([a, b]) => [a, b]));
   const esc = t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
